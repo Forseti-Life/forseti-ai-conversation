@@ -1,3 +1,4 @@
+<!-- AUTOMATION VALIDATION: 2026-04-23 - automation of development confirmed for this repo -->
 # AI Conversation Module (Shared)
 
 **Canonical shared version of the AI Conversation module used by job-hunter and dungeoncrawler platforms.**
