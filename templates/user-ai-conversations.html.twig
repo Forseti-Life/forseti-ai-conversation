@@ -1,0 +1,58 @@
+{#
+/**
+ * @file
+ * Template for the User AI Conversations block.
+ *
+ * Available variables:
+ * - conversations: Array of conversation data
+ * - total: Total number of conversations
+ */
+#}
+<div class="user-ai-conversations">
+  <h3 class="conversations-title">{{ 'Your AI Conversations'|t }} ({{ total }})</h3>
+  
+  <div class="conversations-list">
+    {% for conversation in conversations %}
+      <div class="conversation-item">
+        <div class="conversation-header">
+          <h4 class="conversation-title">
+            <a href="{{ conversation.chat_url }}" class="chat-link">
+              {{ conversation.title }}
+            </a>
+          </h4>
+          <div class="conversation-meta">
+            <span class="conversation-date">{{ conversation.changed|date('M j, Y - H:i') }}</span>
+          </div>
+        </div>
+        
+        <div class="conversation-preview">
+          {{ conversation.preview }}
+        </div>
+        
+        <div class="conversation-stats">
+          <span class="stat-item">
+            <strong>{{ conversation.message_count }}</strong> {{ 'messages'|t }}
+          </span>
+          <span class="stat-item">
+            <strong>{{ conversation.total_tokens|number_format }}</strong> {{ 'tokens'|t }}
+          </span>
+        </div>
+        
+        <div class="conversation-actions">
+          <a href="{{ conversation.chat_url }}" class="btn btn-primary btn-sm">
+            {{ 'Continue Chat'|t }}
+          </a>
+          <a href="{{ conversation.view_url }}" class="btn btn-secondary btn-sm">
+            {{ 'View Details'|t }}
+          </a>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+  
+  <div class="conversations-footer">
+    <a href="/clauddemo" class="btn btn-success">
+      {{ 'Start New Conversation'|t }}
+    </a>
+  </div>
+</div>

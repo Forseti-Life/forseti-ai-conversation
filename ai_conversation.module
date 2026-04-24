@@ -1,0 +1,218 @@
+<?php
+
+/**
+ * @file
+ * AI Conversation module.
+ */
+
+use Drupal\Core\Entity\Display\EntityViewDisplayInterface;
+use Drupal\Core\Entity\EntityInterface;
+use Drupal\Core\Url;
+
+/**
+ * Implements hook_theme().
+ */
+function ai_conversation_theme() {
+  return [
+    'ai_conversation_chat' => [
+      'variables' => [
+        'conversation' => NULL,
+        'messages' => [],
+        'stats' => NULL,
+      ],
+      'template' => 'ai-conversation-chat',
+    ],
+    'user_ai_conversations' => [
+      'variables' => [
+        'conversations' => [],
+        'total' => 0,
+      ],
+      'template' => 'user-ai-conversations',
+    ],
+    'ai_usage_dashboard' => [
+      'variables' => [
+        'statistics' => [],
+        'recent_calls' => [],
+        'module_breakdown' => [],
+        'daily_usage' => [],
+      ],
+      'template' => 'ai-usage-dashboard',
+    ],
+    'genai_debug_list' => [
+      'variables' => [
+        'calls' => [],
+        'modules' => [],
+        'operations' => [],
+        'current_module' => NULL,
+        'current_operation' => NULL,
+        'current_success' => NULL,
+        'current_limit' => 100,
+      ],
+      'template' => 'genai-debug-list',
+    ],
+    'genai_debug_detail' => [
+      'variables' => [
+        'call_data' => [],
+      ],
+      'template' => 'genai-debug-detail',
+    ],
+    'forseti_chat' => [
+      'variables' => [
+        'conversation' => NULL,
+        'messages' => [],
+        'stats' => NULL,
+        'export_url' => '',
+      ],
+      'template' => 'forseti-chat',
+    ],
+    'forseti_conversations' => [
+      'variables' => [
+        'conversations' => [],
+        'total' => 0,
+        'page' => 1,
+        'per_page' => 20,
+        'has_next' => FALSE,
+        'has_prev' => FALSE,
+      ],
+      'template' => 'forseti-conversations',
+    ],
+    'ai_model_pricing' => [
+      'variables' => [
+        'pricing_data' => [],
+      ],
+      'template' => 'ai-model-pricing',
+    ],
+  ];
+}
+
+/**
+ * Implements hook_entity_view().
+ */
+function ai_conversation_entity_view(array &$build, EntityInterface $entity, EntityViewDisplayInterface $display, $view_mode) {
+  if ($entity->getEntityTypeId() === 'node' && $entity->bundle() === 'ai_conversation') {
+    // Add a link to the chat interface.
+    $build['chat_link'] = [
+      '#type' => 'link',
+      '#title' => t('Start Chat'),
+      '#url' => Url::fromRoute('ai_conversation.chat_interface', ['node' => $entity->id()]),
+      '#attributes' => [
+        'class' => ['btn', 'btn-primary'],
+      ],
+      '#weight' => 10,
+    ];
+  }
+}
+
+/**
+ * Implements hook_entity_operation().
+ */
+function ai_conversation_entity_operation(EntityInterface $entity) {
+  $operations = [];
+  
+  if ($entity->getEntityTypeId() === 'node' && $entity->bundle() === 'ai_conversation') {
+    $operations['chat'] = [
+      'title' => t('Chat'),
+      'url' => Url::fromRoute('ai_conversation.chat_interface', ['node' => $entity->id()]),
+      'weight' => 50,
+    ];
+  }
+  
+  return $operations;
+}
+
+/**
+ * Implements hook_form_user_form_alter() — AC-2: user provider preference.
+ *
+ * Adds AI provider/model fields to the user account edit form. Preferences
+ * are stored via user.data service (module: ai_conversation, keys: ai_provider,
+ * ai_model) — no entity field config required.
+ */
+function ai_conversation_form_user_form_alter(array &$form, \Drupal\Core\Form\FormStateInterface $form_state, string $form_id): void {
+  // Only on user profile edit forms (not registration).
+  if ($form_id !== 'user_form') {
+    return;
+  }
+
+  /** @var \Drupal\user\UserInterface $account */
+  $account = $form_state->getFormObject()->getEntity();
+  $uid = (int) $account->id();
+
+  $provider_config = \Drupal::config('ai_conversation.provider_settings');
+  $ollama_service  = \Drupal::service('ai_conversation.ollama_api_service');
+  $user_data       = \Drupal::service('user.data');
+
+  $saved_provider  = $user_data->get('ai_conversation', $uid, 'ai_provider') ?: 'default';
+  $saved_model     = $user_data->get('ai_conversation', $uid, 'ai_model') ?: '';
+
+  $ollama_configured = $ollama_service->isConfigured();
+  $ollama_models     = $ollama_configured ? $ollama_service->getAvailableModels() : [];
+
+  $provider_options = [
+    'default' => t('Use site default'),
+    'bedrock' => t('AWS Bedrock (cloud)'),
+  ];
+  if ($ollama_configured) {
+    $provider_options['ollama'] = t('Ollama (self-hosted)');
+  }
+
+  $form['ai_provider_preferences'] = [
+    '#type' => 'details',
+    '#title' => t('AI Provider Preference'),
+    '#open' => ($saved_provider !== 'default'),
+    '#weight' => 10,
+  ];
+
+  $form['ai_provider_preferences']['field_ai_provider'] = [
+    '#type' => 'select',
+    '#title' => t('Preferred AI provider'),
+    '#options' => $provider_options,
+    '#default_value' => in_array($saved_provider, array_keys($provider_options), TRUE) ? $saved_provider : 'default',
+    '#description' => $ollama_configured
+      ? t('Choose which AI backend handles your chat requests.')
+      : t('Choose which AI backend handles your chat requests. Ollama is not yet configured by the site admin.'),
+  ];
+
+  if (!empty($ollama_models)) {
+    $model_opts = ['' => t('— Use model default —')];
+    foreach ($ollama_models as $m) {
+      $model_opts[$m] = $m;
+    }
+    $form['ai_provider_preferences']['field_ai_model'] = [
+      '#type' => 'select',
+      '#title' => t('Preferred Ollama model'),
+      '#options' => $model_opts,
+      '#default_value' => $saved_model,
+      '#description' => t('Only applies when Ollama is selected as your provider.'),
+      '#states' => [
+        'visible' => [
+          ':input[name="field_ai_provider"]' => ['value' => 'ollama'],
+        ],
+      ],
+    ];
+  }
+
+  $form['#submit'][] = 'ai_conversation_user_form_submit';
+}
+
+/**
+ * User form submit handler — saves AI provider preference via user.data.
+ */
+function ai_conversation_user_form_submit(array &$form, \Drupal\Core\Form\FormStateInterface $form_state): void {
+  /** @var \Drupal\user\UserInterface $account */
+  $account  = $form_state->getFormObject()->getEntity();
+  $uid      = (int) $account->id();
+  $ud       = \Drupal::service('user.data');
+
+  $provider = $form_state->getValue('field_ai_provider') ?: 'default';
+  $model    = $form_state->getValue('field_ai_model') ?: '';
+
+  if ($provider === 'default') {
+    // Clear preferences — user will use site default.
+    $ud->delete('ai_conversation', $uid, 'ai_provider');
+    $ud->delete('ai_conversation', $uid, 'ai_model');
+  }
+  else {
+    $ud->set('ai_conversation', $uid, 'ai_provider', $provider);
+    $ud->set('ai_conversation', $uid, 'ai_model', $model);
+  }
+}

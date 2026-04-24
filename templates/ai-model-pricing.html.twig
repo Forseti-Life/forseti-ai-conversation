@@ -1,0 +1,207 @@
+{#
+/**
+ * @file
+ * Template for displaying Claude model pricing reference.
+ *
+ * Available variables:
+ * - pricing_data: Array of pricing information organized by generation.
+ */
+#}
+
+<div class="ai-model-pricing">
+  <div class="pricing-intro">
+    <p>This page displays current AWS Bedrock pricing for Claude models used in this application. Prices shown are per 1M tokens.</p>
+    <p><strong>Note:</strong> Actual costs may vary based on your AWS account configuration and regional pricing.</p>
+  </div>
+
+  {% for generation_key, generation in pricing_data %}
+    <div class="pricing-generation">
+      <h2>{{ generation.title }}</h2>
+      {% if generation.description %}
+        <p class="generation-description">{{ generation.description }}</p>
+      {% endif %}
+
+      <table class="pricing-table">
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Model ID</th>
+            <th>Input (per 1M tokens)</th>
+            <th>Output (per 1M tokens)</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for model in generation.models %}
+            <tr class="model-row {{ generation_key }}">
+              <td class="model-name"><strong>{{ model.name }}</strong></td>
+              <td class="model-id"><code>{{ model.model_id }}</code></td>
+              <td class="input-price">${{ model.input_price|number_format(2) }}</td>
+              <td class="output-price">${{ model.output_price|number_format(2) }}</td>
+              <td class="model-details">
+                {% if model.highlights %}
+                  <span class="model-highlights">{{ model.highlights }}</span>
+                {% endif %}
+                {% if model.status %}
+                  <span class="model-status">{{ model.status }}</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endfor %}
+
+  <div class="pricing-notes">
+    <h3>Pricing Notes</h3>
+    <ul>
+      <li><strong>Opus models:</strong> Highest capability, best for complex reasoning and creative tasks.</li>
+      <li><strong>Sonnet models:</strong> Balanced intelligence and cost, excellent for coding and analysis.</li>
+      <li><strong>Haiku models:</strong> Fastest and most cost-effective, ideal for high-volume tasks.</li>
+      <li><strong>Token calculation:</strong> Input tokens = prompt size, Output tokens = response size.</li>
+      <li><strong>Example cost:</strong> A 10K input + 5K output request with Sonnet 4.5 costs: (10,000 × $3.00 / 1M) + (5,000 × $15.00 / 1M) = $0.03 + $0.075 = <strong>$0.105</strong></li>
+    </ul>
+    
+    <h3>Output Token Limits</h3>
+    <ul>
+      <li><strong>Default models:</strong> Most Claude models have a 4,096 output token hard limit per request.</li>
+      <li><strong>Batching strategy:</strong> This application uses request batching for operations requiring &gt;4,096 output tokens (e.g., resume tailoring).</li>
+      <li><strong>Context windows:</strong> Input context windows vary by model (typically 200K-1M tokens).</li>
+    </ul>
+  </div>
+
+  <div class="pricing-footer">
+    <p><em>Last updated: February 2026</em></p>
+    <p>For the most current pricing, visit <a href="https://aws.amazon.com/bedrock/pricing/" target="_blank" rel="noopener">AWS Bedrock Pricing Documentation</a>.</p>
+  </div>
+</div>
+
+<style>
+.ai-model-pricing {
+  max-width: 1200px;
+  margin: 20px auto;
+  padding: 20px;
+}
+
+.pricing-intro {
+  background: #f0f7ff;
+  border-left: 4px solid #0066cc;
+  padding: 15px;
+  margin-bottom: 30px;
+}
+
+.pricing-generation {
+  margin-bottom: 40px;
+}
+
+.generation-description {
+  font-size: 14px;
+  color: #666;
+  margin-bottom: 20px;
+}
+
+.pricing-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 20px 0;
+  background: white;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.pricing-table th {
+  background: #f5f5f5;
+  padding: 12px;
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 2px solid #ddd;
+}
+
+.pricing-table td {
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.model-row.claude_4 {
+  background: #fafffe;
+}
+
+.model-row.claude_3_5 {
+  background: #fffef8;
+}
+
+.model-name {
+  font-weight: 600;
+}
+
+.model-id code {
+  background: #f5f5f5;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: #d63384;
+}
+
+.input-price,
+.output-price {
+  font-weight: 600;
+  color: #0066cc;
+}
+
+.model-details {
+  font-size: 13px;
+  color: #666;
+}
+
+.model-highlights {
+  display: block;
+  margin-bottom: 5px;
+}
+
+.model-status {
+  display: block;
+  font-style: italic;
+  color: #888;
+}
+
+.pricing-notes {
+  background: #fffef5;
+  border: 1px solid #ffd700;
+  padding: 20px;
+  margin: 30px 0;
+  border-radius: 4px;
+}
+
+.pricing-notes h3 {
+  margin-top: 0;
+  color: #333;
+}
+
+.pricing-notes ul {
+  margin: 10px 0;
+  padding-left: 20px;
+}
+
+.pricing-notes li {
+  margin-bottom: 8px;
+  line-height: 1.6;
+}
+
+.pricing-footer {
+  margin-top: 30px;
+  padding-top: 20px;
+  border-top: 1px solid #ddd;
+  text-align: center;
+  color: #666;
+  font-size: 14px;
+}
+
+.pricing-footer a {
+  color: #0066cc;
+  text-decoration: none;
+}
+
+.pricing-footer a:hover {
+  text-decoration: underline;
+}
+</style>

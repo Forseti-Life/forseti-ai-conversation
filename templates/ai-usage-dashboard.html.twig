@@ -1,0 +1,164 @@
+<?php
+
+/**
+ * @file
+ * Theme implementation for GenAI API usage dashboard.
+ *
+ * Available variables:
+ * - statistics: Overall usage statistics
+ * - recent_calls: Array of recent API calls
+ * - module_breakdown: Usage breakdown by module
+ * - daily_usage: Daily usage for the last 30 days
+ */
+?>
+
+<div class="genai-usage-dashboard">
+  
+  <!-- Summary Statistics -->
+  <div class="usage-summary">
+    <h2>📊 Usage Summary</h2>
+    <div class="stats-grid">
+      
+      <div class="stat-card">
+        <div class="stat-label">Total API Calls</div>
+        <div class="stat-value"><?php echo number_format($statistics['total_calls']); ?></div>
+      </div>
+      
+      <div class="stat-card">
+        <div class="stat-label">Total Tokens</div>
+        <div class="stat-value"><?php echo number_format($statistics['total_tokens']); ?></div>
+        <div class="stat-detail">
+          <?php echo number_format($statistics['total_input_tokens']); ?> in + 
+          <?php echo number_format($statistics['total_output_tokens']); ?> out
+        </div>
+      </div>
+      
+      <div class="stat-card highlight">
+        <div class="stat-label">Total Cost (All Time)</div>
+        <div class="stat-value">$<?php echo number_format($statistics['total_cost'], 2); ?></div>
+      </div>
+      
+      <div class="stat-card">
+        <div class="stat-label">Today's Usage</div>
+        <div class="stat-value"><?php echo number_format($statistics['today_calls']); ?> calls</div>
+        <div class="stat-detail">$<?php echo number_format($statistics['today_cost'], 4); ?></div>
+      </div>
+      
+      <div class="stat-card">
+        <div class="stat-label">This Month</div>
+        <div class="stat-value">$<?php echo number_format($statistics['month_cost'], 2); ?></div>
+      </div>
+      
+      <div class="stat-card">
+        <div class="stat-label">Avg Response Time</div>
+        <div class="stat-value"><?php echo number_format($statistics['avg_duration_ms']); ?>ms</div>
+      </div>
+      
+    </div>
+  </div>
+
+  <!-- Module Breakdown -->
+  <div class="module-breakdown">
+    <h2>📦 Usage by Module</h2>
+    <table class="usage-table">
+      <thead>
+        <tr>
+          <th>Module</th>
+          <th>API Calls</th>
+          <th>Total Tokens</th>
+          <th>Total Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        <?php foreach ($module_breakdown as $module): ?>
+          <tr>
+            <td><strong><?php echo $module['module']; ?></strong></td>
+            <td><?php echo number_format($module['call_count']); ?></td>
+            <td><?php echo number_format($module['total_tokens']); ?></td>
+            <td>$<?php echo $module['total_cost']; ?></td>
+          </tr>
+        <?php endforeach; ?>
+        <?php if (empty($module_breakdown)): ?>
+          <tr>
+            <td colspan="4" class="no-data">No usage data available yet</td>
+          </tr>
+        <?php endif; ?>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Daily Usage Trend -->
+  <?php if (!empty($daily_usage)): ?>
+    <div class="daily-usage">
+      <h2>📈 Daily Usage (Last 30 Days)</h2>
+      <table class="usage-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>API Calls</th>
+            <th>Daily Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach (array_reverse($daily_usage) as $day): ?>
+            <tr>
+              <td><?php echo $day['date']; ?></td>
+              <td><?php echo number_format($day['call_count']); ?></td>
+              <td>$<?php echo $day['cost']; ?></td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+  <?php endif; ?>
+
+  <!-- Recent API Calls -->
+  <div class="recent-calls">
+    <h2>🕒 Recent API Calls (Last 50)</h2>
+    <table class="usage-table">
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Module</th>
+          <th>Operation</th>
+          <th>Model</th>
+          <th>Tokens (In/Out)</th>
+          <th>Cost</th>
+          <th>Duration</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <?php foreach ($recent_calls as $call): ?>
+          <tr>
+            <td><?php echo $call['timestamp']; ?></td>
+            <td><span class="badge"><?php echo $call['module']; ?></span></td>
+            <td><?php echo $call['operation']; ?></td>
+            <td class="model-id"><?php echo substr($call['model_id'], 0, 30); ?>...</td>
+            <td>
+              <span class="token-count"><?php echo number_format($call['input_tokens']); ?></span> / 
+              <span class="token-count"><?php echo number_format($call['output_tokens']); ?></span>
+            </td>
+            <td>$<?php echo $call['cost']; ?></td>
+            <td><?php echo number_format($call['duration_ms']); ?>ms</td>
+            <td>
+              <?php if ($call['stop_reason'] === 'end_turn'): ?>
+                <span class="status-success">✅ Complete</span>
+              <?php elseif ($call['stop_reason'] === 'max_tokens'): ?>
+                <span class="status-warning">⚠️ Truncated</span>
+              <?php else: ?>
+                <span class="status-unknown"><?php echo $call['stop_reason']; ?></span>
+              <?php endif; ?>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+        <?php if (empty($recent_calls)): ?>
+          <tr>
+            <td colspan="8" class="no-data">No API calls recorded yet</td>
+          </tr>
+        <?php endif; ?>
+      </tbody>
+    </table>
+  </div>
+
+</div>

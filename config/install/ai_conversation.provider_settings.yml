@@ -1,0 +1,7 @@
+default_provider: bedrock
+ollama_base_url: ''
+ollama_available_models:
+  - llama3
+  - llama3.1
+  - mistral
+  - gemma2

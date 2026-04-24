@@ -1,0 +1,60 @@
+langcode: en
+status: true
+dependencies:
+  config:
+    - field.field.node.community_suggestion.field_conversation_reference
+    - field.field.node.community_suggestion.field_original_message
+    - field.field.node.community_suggestion.field_suggestion_category
+    - field.field.node.community_suggestion.field_suggestion_status
+    - field.field.node.community_suggestion.field_suggestion_summary
+    - node.type.community_suggestion
+  module:
+    - text
+    - user
+id: node.community_suggestion.default
+targetEntityType: node
+bundle: community_suggestion
+mode: default
+content:
+  field_suggestion_summary:
+    type: text_default
+    label: above
+    weight: 1
+    region: content
+    settings: {  }
+    third_party_settings: {  }
+  field_original_message:
+    type: text_default
+    label: above
+    weight: 2
+    region: content
+    settings: {  }
+    third_party_settings: {  }
+  field_conversation_reference:
+    type: entity_reference_label
+    label: above
+    weight: 3
+    region: content
+    settings:
+      link: true
+    third_party_settings: {  }
+  field_suggestion_category:
+    type: list_default
+    label: above
+    weight: 4
+    region: content
+    settings: {  }
+    third_party_settings: {  }
+  field_suggestion_status:
+    type: list_default
+    label: above
+    weight: 5
+    region: content
+    settings: {  }
+    third_party_settings: {  }
+  links:
+    weight: 0
+    region: content
+    settings: {  }
+    third_party_settings: {  }
+hidden: {  }

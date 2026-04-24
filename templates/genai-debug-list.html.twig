@@ -1,0 +1,214 @@
+{#
+/**
+ * @file
+ * Template for GenAI Debug Inspector - List View
+ *
+ * Available variables:
+ * - calls: Array of GenAI API call records
+ * - modules: Array of unique module names for filter
+ * - operations: Array of unique operation names for filter
+ * - current_module: Currently selected module filter
+ * - current_operation: Currently selected operation filter
+ * - current_success: Currently selected success filter
+ * - current_limit: Currently selected limit
+ * - current_days: Currently selected days filter
+ * - filtered_total_cost: Total cost for filtered period
+ * - filtered_total_calls: Total calls for filtered period
+ * - alltime_total_cost: All-time total cost
+ * - alltime_total_calls: All-time total calls
+ */
+#}
+
+<div class="genai-debug-inspector">
+  <h2>GenAI Debug Inspector</h2>
+  <p class="description">Inspect actual GenAI request/response data for debugging.</p>
+
+  {# Filters #}
+  <div class="genai-debug-filters" style="background: #f5f5f5; padding: 15px; margin-bottom: 20px; border-radius: 4px;">
+    <form method="get" style="display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;">
+      
+      <div style="flex: 1; min-width: 150px;">
+        <label for="module" style="display: block; font-weight: bold; margin-bottom: 5px;">Module:</label>
+        <select name="module" id="module" style="width: 100%; padding: 5px;">
+          <option value="">All Modules</option>
+          {% for module in modules %}
+            <option value="{{ module }}" {% if current_module == module %}selected{% endif %}>{{ module }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div style="flex: 1; min-width: 150px;">
+        <label for="operation" style="display: block; font-weight: bold; margin-bottom: 5px;">Operation:</label>
+        <select name="operation" id="operation" style="width: 100%; padding: 5px;">
+          <option value="">All Operations</option>
+          {% for operation in operations %}
+            <option value="{{ operation }}" {% if current_operation == operation %}selected{% endif %}>{{ operation }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div style="flex: 0 0 150px;">
+        <label for="success" style="display: block; font-weight: bold; margin-bottom: 5px;">Status:</label>
+        <select name="success" id="success" style="width: 100%; padding: 5px;">
+          <option value="">All</option>
+          <option value="1" {% if current_success == '1' %}selected{% endif %}>Success ✅</option>
+          <option value="0" {% if current_success == '0' %}selected{% endif %}>Failed ❌</option>
+        </select>
+      </div>
+
+      <div style="flex: 0 0 120px;">
+        <label for="days" style="display: block; font-weight: bold; margin-bottom: 5px;">Time Period:</label>
+        <select name="days" id="days" style="width: 100%; padding: 5px;">
+          <option value="1" {% if current_days == 1 %}selected{% endif %}>Last 24 hours</option>
+          <option value="3" {% if current_days == 3 %}selected{% endif %}>Last 3 days</option>
+          <option value="7" {% if current_days == 7 %}selected{% endif %}>Last 7 days</option>
+          <option value="30" {% if current_days == 30 %}selected{% endif %}>Last 30 days</option>
+          <option value="90" {% if current_days == 90 %}selected{% endif %}>Last 90 days</option>
+          <option value="0" {% if current_days == 0 %}selected{% endif %}>All Time</option>
+        </select>
+      </div>
+
+      <div style="flex: 0 0 120px;">
+        <label for="limit" style="display: block; font-weight: bold; margin-bottom: 5px;">Limit:</label>
+        <select name="limit" id="limit" style="width: 100%; padding: 5px;">
+          <option value="50" {% if current_limit == 50 %}selected{% endif %}>50</option>
+          <option value="100" {% if current_limit == 100 %}selected{% endif %}>100</option>
+          <option value="200" {% if current_limit == 200 %}selected{% endif %}>200</option>
+          <option value="500" {% if current_limit == 500 %}selected{% endif %}>500</option>
+        </select>
+      </div>
+
+      <div style="flex: 0 0 auto;">
+        <button type="submit" style="padding: 6px 20px; background: #0073aa; color: white; border: none; border-radius: 3px; cursor: pointer;">
+          Filter
+        </button>
+        <a href="/admin/reports/genai-debug" style="padding: 6px 15px; background: #ddd; color: #333; text-decoration: none; border-radius: 3px; display: inline-block; margin-left: 5px;">
+          Clear
+        </a>
+      </div>
+    </form>
+    
+    {# Delete All Filtered button #}
+    {% if calls is not empty %}
+      <form method="post" action="/admin/reports/genai-debug/delete-all" style="display: inline-block; margin-left: 10px;" onsubmit="return confirm('Delete ALL {{ calls|length }} filtered GenAI calls? This will force fresh API calls.');">
+        <input type="hidden" name="module" value="{{ current_module }}">
+        <input type="hidden" name="operation" value="{{ current_operation }}">
+        <input type="hidden" name="success" value="{{ current_success }}">
+        <input type="hidden" name="days" value="{{ current_days }}">
+        <button type="submit" style="padding: 6px 15px; background: #d32f2f; color: white; border: none; border-radius: 3px; cursor: pointer; font-weight: 600;">
+          🗑️ Delete All Filtered ({{ calls|length }})
+        </button>
+      </form>
+    {% endif %}
+  </div>
+
+  {# Cost Totals Summary #}
+  <div style="background: white; padding: 15px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px;">
+      
+      {# Filtered Period Total #}
+      <div style="padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px; color: white;">
+        <div style="font-size: 12px; opacity: 0.9; margin-bottom: 5px;">
+          {% if current_days == 1 %}
+            Last 24 Hours
+          {% elseif current_days == 0 %}
+            All Time (Filtered)
+          {% else %}
+            Last {{ current_days }} Days
+          {% endif %}
+        </div>
+        <div style="font-size: 28px; font-weight: bold; margin-bottom: 5px;">
+          ${{ filtered_total_cost|number_format(4) }}
+        </div>
+        <div style="font-size: 14px; opacity: 0.9;">
+          {{ filtered_total_calls|number_format(0) }} calls
+        </div>
+      </div>
+
+      {# All-Time Running Total #}
+      <div style="padding: 15px; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); border-radius: 8px; color: white;">
+        <div style="font-size: 12px; opacity: 0.9; margin-bottom: 5px;">
+          Running Total (All Time)
+        </div>
+        <div style="font-size: 28px; font-weight: bold; margin-bottom: 5px;">
+          ${{ alltime_total_cost|number_format(4) }}
+        </div>
+        <div style="font-size: 14px; opacity: 0.9;">
+          {{ alltime_total_calls|number_format(0) }} total calls
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  {# Results Count #}
+  <div style="margin-bottom: 10px;">
+    <strong>{{ calls|length }} calls found</strong>
+  </div>
+
+  {# Calls Table #}
+  {% if calls %}
+    <div style="overflow-x: auto;">
+      <table style="width: 100%; border-collapse: collapse; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+        <thead>
+          <tr style="background: #f9f9f9; border-bottom: 2px solid #ddd;">
+            <th style="padding: 10px; text-align: left;">ID</th>
+            <th style="padding: 10px; text-align: left;">Time</th>
+            <th style="padding: 10px; text-align: left;">Module</th>
+            <th style="padding: 10px; text-align: left;">Operation</th>
+            <th style="padding: 10px; text-align: left;">Model</th>
+            <th style="padding: 10px; text-align: right;">Tokens</th>
+            <th style="padding: 10px; text-align: right;">Cost</th>
+            <th style="padding: 10px; text-align: center;">Status</th>
+            <th style="padding: 10px; text-align: left;">Stop Reason</th>
+            <th style="padding: 10px; text-align: center;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for call in calls %}
+            <tr style="border-bottom: 1px solid #eee; {% if not call.success_bool %}background: #fff3cd;{% endif %}">
+              <td style="padding: 10px;">{{ call.id }}</td>
+              <td style="padding: 10px; white-space: nowrap;">{{ call.timestamp_ago }}</td>
+              <td style="padding: 10px;"><span style="background: #e3f2fd; padding: 2px 6px; border-radius: 3px; font-size: 12px;">{{ call.module }}</span></td>
+              <td style="padding: 10px;"><code style="font-size: 11px;">{{ call.operation }}</code></td>
+              <td style="padding: 10px; font-size: 11px;">{{ call.model_id }}</td>
+              <td style="padding: 10px; text-align: right;">{{ call.total_tokens }}</td>
+              <td style="padding: 10px; text-align: right;">{{ call.cost }}</td>
+              <td style="padding: 10px; text-align: center;">{{ call.success }}</td>
+              <td style="padding: 10px;">
+                {% if call.stop_reason %}
+                  <span style="font-size: 11px; {% if call.stop_reason == 'max_tokens' %}color: #d32f2f; font-weight: bold;{% endif %}">
+                    {{ call.stop_reason }}
+                  </span>
+                {% endif %}
+              </td>
+              <td style="padding: 10px; text-align: center;">
+                <a href="/admin/reports/genai-debug/{{ call.id }}" 
+                   style="background: #0073aa; color: white; padding: 4px 12px; border-radius: 3px; text-decoration: none; font-size: 12px; margin-right: 5px;">
+                  View
+                </a>
+                <form method="post" action="/admin/reports/genai-debug/{{ call.id }}/delete" style="display: inline;" onsubmit="return confirm('Delete this GenAI call record? This will force a fresh API call next time.');">
+                  <button type="submit" style="background: #d32f2f; color: white; padding: 4px 12px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">
+                    Delete
+                  </button>
+                </form>
+              </td>
+            </tr>
+            {% if call.error_message %}
+              <tr style="border-bottom: 1px solid #eee; background: #fff3cd;">
+                <td colspan="10" style="padding: 5px 10px; font-size: 12px;">
+                  <strong style="color: #d32f2f;">Error:</strong> {{ call.error_message }}
+                </td>
+              </tr>
+            {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div style="padding: 40px; text-align: center; background: #f9f9f9; border-radius: 4px;">
+      <p style="color: #666; font-size: 16px;">No GenAI API calls found matching your filters.</p>
+    </div>
+  {% endif %}
+
+</div>

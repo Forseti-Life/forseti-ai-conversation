@@ -1,0 +1,898 @@
+<?php
+
+/**
+ * @file
+ * Install file for AI Conversation module.
+ */
+
+use Drupal\node\Entity\NodeType;
+use Drupal\field\Entity\FieldConfig;
+use Drupal\field\Entity\FieldStorageConfig;
+
+/**
+ * Implements hook_schema().
+ */
+function ai_conversation_schema() {
+  $schema['ai_conversation_api_usage'] = [
+    'description' => 'Tracks all GenAI API calls across the system for cost monitoring and analysis',
+    'fields' => [
+      'id' => [
+        'type' => 'serial',
+        'not null' => TRUE,
+        'description' => 'Primary Key: Unique usage record ID',
+      ],
+      'timestamp' => [
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Unix timestamp when the API call was made',
+      ],
+      'uid' => [
+        'type' => 'int',
+        'not null' => FALSE,
+        'default' => 0,
+        'description' => 'User ID who triggered the API call',
+      ],
+      'module' => [
+        'type' => 'varchar',
+        'length' => 128,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'Module that made the API call (e.g., job_hunter, ai_conversation)',
+      ],
+      'operation' => [
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'Operation type (e.g., resume_parsing, chat_message, job_posting_parsing)',
+      ],
+      'model_id' => [
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'AWS Bedrock model identifier',
+      ],
+      'input_tokens' => [
+        'type' => 'int',
+        'not null' => FALSE,
+        'default' => 0,
+        'description' => 'Estimated input tokens sent to API',
+      ],
+      'output_tokens' => [
+        'type' => 'int',
+        'not null' => FALSE,
+        'default' => 0,
+        'description' => 'Estimated output tokens received from API',
+      ],
+      'stop_reason' => [
+        'type' => 'varchar',
+        'length' => 64,
+        'not null' => FALSE,
+        'default' => '',
+        'description' => 'API stop reason (end_turn, max_tokens, etc.)',
+      ],
+      'duration_ms' => [
+        'type' => 'int',
+        'not null' => FALSE,
+        'default' => 0,
+        'description' => 'API call duration in milliseconds',
+      ],
+      'estimated_cost' => [
+        'type' => 'numeric',
+        'precision' => 10,
+        'scale' => 6,
+        'not null' => FALSE,
+        'default' => 0,
+        'description' => 'Estimated cost in USD based on token usage',
+      ],
+      'context_data' => [
+        'type' => 'text',
+        'size' => 'normal',
+        'not null' => FALSE,
+        'description' => 'JSON-encoded additional context (entity_id, queue_id, etc.)',
+      ],
+    ],
+    'primary key' => ['id'],
+    'indexes' => [
+      'timestamp' => ['timestamp'],
+      'uid' => ['uid'],
+      'module' => ['module'],
+      'operation' => ['operation'],
+      'module_operation' => ['module', 'operation'],
+    ],
+  ];
+
+  return $schema;
+}
+
+/**
+ * Implements hook_install().
+ */
+function ai_conversation_install() {
+  // Create the conversation content type if it doesn't exist.
+  $conversation_type = NodeType::load('ai_conversation');
+  if (!$conversation_type) {
+    $conversation_type = NodeType::create([
+      'type' => 'ai_conversation',
+      'name' => 'AI Conversation',
+      'description' => 'A conversation with an AI model',
+      'settings' => [
+        'node' => [
+          'options' => [
+            'status' => TRUE,
+            'promote' => FALSE,
+            'sticky' => FALSE,
+            'revision' => TRUE,
+          ],
+          'preview' => DRUPAL_DISABLED,
+          'submitted' => TRUE,
+        ],
+      ],
+    ]);
+    $conversation_type->save();
+    \Drupal::logger('ai_conversation')->notice('Created ai_conversation content type.');
+  } else {
+    \Drupal::logger('ai_conversation')->notice('ai_conversation content type already exists, skipping creation.');
+  }
+
+  // Create the community suggestion content type if it doesn't exist.
+  $suggestion_type = NodeType::load('community_suggestion');
+  if (!$suggestion_type) {
+    $suggestion_type = NodeType::create([
+      'type' => 'community_suggestion',
+      'name' => 'Community Suggestion',
+      'description' => 'A suggestion submitted by a community member through Forseti AI',
+      'settings' => [
+        'node' => [
+          'options' => [
+            'status' => TRUE,
+            'promote' => FALSE,
+            'sticky' => FALSE,
+            'revision' => TRUE,
+          ],
+          'preview' => DRUPAL_DISABLED,
+          'submitted' => TRUE,
+        ],
+      ],
+    ]);
+    $suggestion_type->save();
+    \Drupal::logger('ai_conversation')->notice('Created community_suggestion content type.');
+  } else {
+    \Drupal::logger('ai_conversation')->notice('community_suggestion content type already exists, skipping creation.');
+  }
+
+  // Create fields for the conversation content type.
+  _ai_conversation_create_fields();
+  
+  // Create fields for the suggestion content type.
+  _ai_conversation_create_suggestion_fields();
+
+  // Set default permissions.
+  _ai_conversation_set_permissions();
+
+  // Initialize default system prompt configuration.
+  _ai_conversation_init_system_prompt();
+}
+
+/**
+ * Create fields for the conversation content type.
+ */
+function _ai_conversation_create_fields() {
+  $fields_to_create = [
+    'field_messages' => [
+      'type' => 'text_long',
+      'cardinality' => -1, // Unlimited values
+      'label' => 'Messages',
+      'description' => 'Conversation messages',
+      'settings' => [],
+    ],
+    'field_ai_model' => [
+      'type' => 'string',
+      'cardinality' => 1,
+      'label' => 'AI Model',
+      'description' => 'The AI model to use for this conversation',
+      'required' => TRUE,
+      'default_value' => [['value' => 'us.anthropic.claude-sonnet-4-5-20250929-v1:0']],
+      'settings' => ['max_length' => 255],
+    ],
+    'field_context' => [
+      'type' => 'text_long',
+      'cardinality' => 1,
+      'label' => 'Context',
+      'description' => 'System prompt or conversation context',
+      'settings' => [],
+    ],
+    'field_conversation_summary' => [
+      'type' => 'text_long',
+      'cardinality' => 1,
+      'label' => 'Conversation Summary',
+      'description' => 'Rolling summary of older conversation messages',
+      'settings' => [],
+    ],
+    'field_message_count' => [
+      'type' => 'integer',
+      'cardinality' => 1,
+      'label' => 'Message Count',
+      'description' => 'Total number of messages in this conversation',
+      'default_value' => [['value' => 0]],
+      'settings' => [],
+    ],
+    'field_summary_updated' => [
+      'type' => 'timestamp',
+      'cardinality' => 1,
+      'label' => 'Summary Updated',
+      'description' => 'When the conversation summary was last updated',
+      'settings' => [],
+    ],
+    'field_summary_message_count' => [
+      'type' => 'integer',
+      'cardinality' => 1,
+      'label' => 'Summary Message Count',
+      'description' => 'Counter for summary frequency logic',
+      'default_value' => [['value' => 0]],
+      'settings' => [],
+    ],
+    'field_total_tokens' => [
+      'type' => 'integer',
+      'cardinality' => 1,
+      'label' => 'Total Tokens',
+      'description' => 'Total tokens used in this conversation',
+      'default_value' => [['value' => 0]],
+      'settings' => [],
+    ],
+  ];
+
+  foreach ($fields_to_create as $field_name => $field_info) {
+    // Create field storage if it doesn't exist.
+    $field_storage = FieldStorageConfig::loadByName('node', $field_name);
+    if (!$field_storage) {
+      $field_storage = FieldStorageConfig::create([
+        'field_name' => $field_name,
+        'entity_type' => 'node',
+        'type' => $field_info['type'],
+        'cardinality' => $field_info['cardinality'],
+        'settings' => $field_info['settings'],
+      ]);
+      $field_storage->save();
+    }
+
+    // Create field config if it doesn't exist.
+    $field_config = FieldConfig::loadByName('node', 'ai_conversation', $field_name);
+    if (!$field_config) {
+      $field_config = FieldConfig::create([
+        'field_storage' => $field_storage,
+        'bundle' => 'ai_conversation',
+        'label' => $field_info['label'],
+        'description' => $field_info['description'],
+        'required' => $field_info['required'] ?? FALSE,
+        'default_value' => $field_info['default_value'] ?? [],
+        'settings' => [],
+      ]);
+      $field_config->save();
+    }
+  }
+}
+
+/**
+ * Create fields for the community suggestion content type.
+ */
+function _ai_conversation_create_suggestion_fields() {
+  $fields_to_create = [
+    'field_suggestion_summary' => [
+      'type' => 'text_long',
+      'cardinality' => 1,
+      'label' => 'Suggestion Summary',
+      'description' => 'AI-generated summary of the suggestion',
+      'required' => TRUE,
+      'settings' => [],
+    ],
+    'field_original_message' => [
+      'type' => 'text_long',
+      'cardinality' => 1,
+      'label' => 'Original Message',
+      'description' => 'The original user message containing the suggestion',
+      'settings' => [],
+    ],
+    'field_conversation_reference' => [
+      'type' => 'entity_reference',
+      'cardinality' => 1,
+      'label' => 'Conversation',
+      'description' => 'Reference to the conversation where this suggestion was made',
+      'settings' => [
+        'target_type' => 'node',
+        'handler' => 'default:node',
+        'handler_settings' => [
+          'target_bundles' => ['ai_conversation' => 'ai_conversation'],
+        ],
+      ],
+    ],
+    'field_suggestion_category' => [
+      'type' => 'list_string',
+      'cardinality' => 1,
+      'label' => 'Category',
+      'description' => 'Category of the suggestion',
+      'settings' => [
+        'allowed_values' => [
+          'safety_feature' => 'Safety Feature',
+          'partnership' => 'Partnership Opportunity',
+          'community_initiative' => 'Community Initiative',
+          'technical_improvement' => 'Technical Improvement',
+          'content_update' => 'Content Update',
+          'general_feedback' => 'General Feedback',
+          'other' => 'Other',
+        ],
+      ],
+    ],
+    'field_suggestion_status' => [
+      'type' => 'list_string',
+      'cardinality' => 1,
+      'label' => 'Status',
+      'description' => 'Status of the suggestion',
+      'default_value' => [['value' => 'new']],
+      'settings' => [
+        'allowed_values' => [
+          'new' => 'New',
+          'under_review' => 'Under Review',
+          'in_progress' => 'In Progress',
+          'implemented' => 'Implemented',
+          'declined' => 'Declined',
+          'deferred' => 'Deferred',
+        ],
+      ],
+    ],
+  ];
+
+  foreach ($fields_to_create as $field_name => $field_info) {
+    // Create field storage if it doesn't exist.
+    $field_storage = FieldStorageConfig::loadByName('node', $field_name);
+    if (!$field_storage) {
+      $field_storage = FieldStorageConfig::create([
+        'field_name' => $field_name,
+        'entity_type' => 'node',
+        'type' => $field_info['type'],
+        'cardinality' => $field_info['cardinality'],
+        'settings' => $field_info['settings'] ?? [],
+      ]);
+      $field_storage->save();
+    }
+
+    // Create field config if it doesn't exist.
+    $field_config = FieldConfig::loadByName('node', 'community_suggestion', $field_name);
+    if (!$field_config) {
+      $field_config = FieldConfig::create([
+        'field_storage' => $field_storage,
+        'bundle' => 'community_suggestion',
+        'label' => $field_info['label'],
+        'description' => $field_info['description'],
+        'required' => $field_info['required'] ?? FALSE,
+        'default_value' => $field_info['default_value'] ?? [],
+        'settings' => [],
+      ]);
+      $field_config->save();
+    }
+  }
+}
+
+/**
+ * Set default permissions for the conversation content type.
+ */
+function _ai_conversation_set_permissions() {
+  $role_storage = \Drupal::entityTypeManager()->getStorage('user_role');
+  
+  // Give authenticated users permission to create conversations.
+  $authenticated_role = $role_storage->load('authenticated');
+  if ($authenticated_role) {
+    $authenticated_role->grantPermission('create ai_conversation content');
+    $authenticated_role->grantPermission('edit own ai_conversation content');
+    $authenticated_role->grantPermission('delete own ai_conversation content');
+    // Note: 'view own ai_conversation content' is not a valid core permission
+    // Content access is handled by the node access system
+    $authenticated_role->save();
+  }
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function ai_conversation_uninstall() {
+  // WARNING: Do not remove fields or field storage during uninstall.
+  // This would delete all conversation data permanently.
+  
+  // Only remove the content type configuration, not the fields or data.
+  // This allows the module to be safely disabled/enabled without data loss.
+  
+  $node_storage = \Drupal::entityTypeManager()->getStorage('node');
+  
+  // Count total conversations
+  $conversation_query = $node_storage->getQuery()
+    ->condition('type', 'ai_conversation')
+    ->accessCheck(FALSE);
+  $total_conversations = $conversation_query->count()->execute();
+
+  // Count total suggestions
+  $suggestion_query = $node_storage->getQuery()
+    ->condition('type', 'community_suggestion')
+    ->accessCheck(FALSE);
+  $total_suggestions = $suggestion_query->count()->execute();
+
+  $messages = [];
+  
+  // Handle ai_conversation content type
+  if ($total_conversations == 0) {
+    $conversation_type = NodeType::load('ai_conversation');
+    if ($conversation_type) {
+      $conversation_type->delete();
+      \Drupal::logger('ai_conversation')->notice('Removed ai_conversation content type (no existing nodes found).');
+      $messages[] = 'AI Conversation content type removed (no data found).';
+    }
+  } else {
+    \Drupal::logger('ai_conversation')->warning('ai_conversation content type and @count conversations preserved during uninstall.', ['@count' => $total_conversations]);
+    $messages[] = t('@count conversations preserved.', ['@count' => $total_conversations]);
+  }
+  
+  // Handle community_suggestion content type
+  if ($total_suggestions == 0) {
+    $suggestion_type = NodeType::load('community_suggestion');
+    if ($suggestion_type) {
+      $suggestion_type->delete();
+      \Drupal::logger('ai_conversation')->notice('Removed community_suggestion content type (no existing nodes found).');
+      $messages[] = 'Community Suggestion content type removed (no data found).';
+    }
+  } else {
+    \Drupal::logger('ai_conversation')->warning('community_suggestion content type and @count suggestions preserved during uninstall.', ['@count' => $total_suggestions]);
+    $messages[] = t('@count suggestions preserved.', ['@count' => $total_suggestions]);
+  }
+
+  // Always remove module-specific configuration
+  $config = \Drupal::configFactory()->getEditable('ai_conversation.settings');
+  if (!$config->isNew()) {
+    $config->delete();
+    \Drupal::logger('ai_conversation')->notice('Removed ai_conversation module settings.');
+  }
+  
+  // Display appropriate message
+  if ($total_conversations > 0 || $total_suggestions > 0) {
+    \Drupal::messenger()->addWarning(t('AI Conversation module uninstalled. @messages To completely remove all data, use: drush php-eval "_ai_conversation_complete_removal();"', ['@messages' => implode(' ', $messages)]));
+  } else {
+    \Drupal::messenger()->addStatus(t('AI Conversation module uninstalled successfully. @messages', ['@messages' => implode(' ', $messages)]));
+  }
+}
+
+/**
+ * Helper function to completely remove all AI conversation data and fields.
+ * 
+ * WARNING: This will permanently delete all conversation and suggestion data!
+ * Only call this if you're absolutely sure you want to remove all data.
+ * 
+ * Usage: Run this via drush php-eval:
+ * drush php-eval "_ai_conversation_complete_removal();"
+ */
+function _ai_conversation_complete_removal() {
+  $node_storage = \Drupal::entityTypeManager()->getStorage('node');
+  
+  // Delete all ai_conversation nodes
+  $conversation_query = $node_storage->getQuery()
+    ->condition('type', 'ai_conversation')
+    ->accessCheck(FALSE);
+  $conversation_nids = $conversation_query->execute();
+  
+  if (!empty($conversation_nids)) {
+    $nodes = $node_storage->loadMultiple($conversation_nids);
+    $node_storage->delete($nodes);
+    \Drupal::logger('ai_conversation')->notice('Deleted @count AI conversation nodes.', ['@count' => count($conversation_nids)]);
+  }
+  
+  // Delete all community_suggestion nodes
+  $suggestion_query = $node_storage->getQuery()
+    ->condition('type', 'community_suggestion')
+    ->accessCheck(FALSE);
+  $suggestion_nids = $suggestion_query->execute();
+  
+  if (!empty($suggestion_nids)) {
+    $nodes = $node_storage->loadMultiple($suggestion_nids);
+    $node_storage->delete($nodes);
+    \Drupal::logger('ai_conversation')->notice('Deleted @count community suggestion nodes.', ['@count' => count($suggestion_nids)]);
+  }
+  
+  // Remove the ai_conversation content type
+  $conversation_type = NodeType::load('ai_conversation');
+  if ($conversation_type) {
+    $conversation_type->delete();
+    \Drupal::logger('ai_conversation')->notice('Removed ai_conversation content type.');
+  }
+  
+  // Remove the community_suggestion content type
+  $suggestion_type = NodeType::load('community_suggestion');
+  if ($suggestion_type) {
+    $suggestion_type->delete();
+    \Drupal::logger('ai_conversation')->notice('Removed community_suggestion content type.');
+  }
+  
+  // Remove all ai_conversation field configurations and storage
+  $conversation_fields = [
+    'field_messages', 
+    'field_ai_model', 
+    'field_context',
+    'field_conversation_summary',
+    'field_message_count',
+    'field_summary_updated',
+    'field_summary_message_count',
+    'field_total_tokens'
+  ];
+  
+  foreach ($conversation_fields as $field_name) {
+    // Remove field configuration
+    $field_config = FieldConfig::loadByName('node', 'ai_conversation', $field_name);
+    if ($field_config) {
+      $field_config->delete();
+    }
+    
+    // Remove field storage (this will delete all data in the field)
+    $field_storage = FieldStorageConfig::loadByName('node', $field_name);
+    if ($field_storage) {
+      $field_storage->delete();
+      \Drupal::logger('ai_conversation')->notice('Removed field storage for @field.', ['@field' => $field_name]);
+    }
+  }
+  
+  // Remove all community_suggestion field configurations and storage
+  $suggestion_fields = [
+    'field_suggestion_summary',
+    'field_original_message',
+    'field_conversation_reference',
+    'field_suggestion_category',
+    'field_suggestion_status'
+  ];
+  
+  foreach ($suggestion_fields as $field_name) {
+    // Remove field configuration
+    $field_config = FieldConfig::loadByName('node', 'community_suggestion', $field_name);
+    if ($field_config) {
+      $field_config->delete();
+    }
+    
+    // Remove field storage (this will delete all data in the field)
+    $field_storage = FieldStorageConfig::loadByName('node', $field_name);
+    if ($field_storage) {
+      $field_storage->delete();
+      \Drupal::logger('ai_conversation')->notice('Removed field storage for @field.', ['@field' => $field_name]);
+    }
+  }
+  
+  // Remove module configuration
+  \Drupal::configFactory()->getEditable('ai_conversation.settings')->delete();
+  
+  \Drupal::messenger()->addStatus(t('Complete AI Conversation data removal finished. All conversation data has been permanently deleted.'));
+}
+
+/**
+ * Initialize default system prompt configuration.
+ */
+function _ai_conversation_init_system_prompt() {
+  // Use PromptManager to initialize the default system prompt.
+  $prompt_manager = \Drupal::service('ai_conversation.prompt_manager');
+  $prompt_manager->initializeDefaultPrompt();
+}
+
+/**
+ * Update hook to add new summary fields to existing installations.
+ */
+function ai_conversation_update_8001() {
+  // Add the new summary fields to existing installations.
+  $fields_to_add = [
+    'field_conversation_summary' => [
+      'type' => 'text_long',
+      'cardinality' => 1,
+      'label' => 'Conversation Summary',
+      'description' => 'Rolling summary of older conversation messages',
+    ],
+    'field_message_count' => [
+      'type' => 'integer',
+      'cardinality' => 1,
+      'label' => 'Message Count',
+      'description' => 'Total number of messages in this conversation',
+      'default_value' => [['value' => 0]],
+    ],
+    'field_summary_updated' => [
+      'type' => 'timestamp',
+      'cardinality' => 1,
+      'label' => 'Summary Updated',
+      'description' => 'When the conversation summary was last updated',
+    ],
+  ];
+
+  foreach ($fields_to_add as $field_name => $field_info) {
+    // Create field storage if it doesn't exist.
+    $field_storage = FieldStorageConfig::loadByName('node', $field_name);
+    if (!$field_storage) {
+      $field_storage = FieldStorageConfig::create([
+        'field_name' => $field_name,
+        'entity_type' => 'node',
+        'type' => $field_info['type'],
+        'cardinality' => $field_info['cardinality'],
+        'settings' => $field_info['settings'] ?? [],
+      ]);
+      $field_storage->save();
+    }
+
+    // Create field config if it doesn't exist.
+    $field_config = FieldConfig::loadByName('node', 'ai_conversation', $field_name);
+    if (!$field_config) {
+      $field_config = FieldConfig::create([
+        'field_storage' => $field_storage,
+        'bundle' => 'ai_conversation',
+        'label' => $field_info['label'],
+        'description' => $field_info['description'],
+        'required' => FALSE,
+        'default_value' => $field_info['default_value'] ?? [],
+        'settings' => [],
+      ]);
+      $field_config->save();
+    }
+  }
+
+  // Update existing conversations to set initial message counts.
+  $node_storage = \Drupal::entityTypeManager()->getStorage('node');
+  $query = $node_storage->getQuery()
+    ->condition('type', 'ai_conversation')
+    ->accessCheck(FALSE);
+  $nids = $query->execute();
+
+  foreach ($nids as $nid) {
+    $node = $node_storage->load($nid);
+    if ($node) {
+      // Count existing messages.
+      $message_count = 0;
+      if ($node->hasField('field_messages') && !$node->get('field_messages')->isEmpty()) {
+        $message_count = count($node->get('field_messages')->getValue());
+      }
+      
+      // Set the message count.
+      $node->set('field_message_count', $message_count);
+      $node->save();
+    }
+  }
+
+  return t('Added conversation summary fields and updated existing conversations.');
+}
+
+/**
+ * Update hook to add total tokens field.
+ */
+function ai_conversation_update_8002() {
+  // Add the total tokens field.
+  $field_storage = FieldStorageConfig::loadByName('node', 'field_total_tokens');
+  if (!$field_storage) {
+    $field_storage = FieldStorageConfig::create([
+      'field_name' => 'field_total_tokens',
+      'entity_type' => 'node',
+      'type' => 'integer',
+      'cardinality' => 1,
+      'settings' => [],
+    ]);
+    $field_storage->save();
+  }
+
+  $field_config = FieldConfig::loadByName('node', 'ai_conversation', 'field_total_tokens');
+  if (!$field_config) {
+    $field_config = FieldConfig::create([
+      'field_storage' => $field_storage,
+      'bundle' => 'ai_conversation',
+      'label' => 'Total Tokens',
+      'description' => 'Total tokens used in this conversation',
+      'required' => FALSE,
+      'default_value' => [['value' => 0]],
+      'settings' => [],
+    ]);
+    $field_config->save();
+  }
+
+  return t('Added total tokens field to AI conversations.');
+}
+
+/**
+ * Update hook to add summary message count field for existing installations.
+ */
+function ai_conversation_update_8003() {
+  // Add the summary message count field that's referenced in code but missing from install.
+  $field_storage = FieldStorageConfig::loadByName('node', 'field_summary_message_count');
+  if (!$field_storage) {
+    $field_storage = FieldStorageConfig::create([
+      'field_name' => 'field_summary_message_count',
+      'entity_type' => 'node',
+      'type' => 'integer',
+      'cardinality' => 1,
+      'settings' => [],
+    ]);
+    $field_storage->save();
+  }
+
+  $field_config = FieldConfig::loadByName('node', 'ai_conversation', 'field_summary_message_count');
+  if (!$field_config) {
+    $field_config = FieldConfig::create([
+      'field_storage' => $field_storage,
+      'bundle' => 'ai_conversation',
+      'label' => 'Summary Message Count',
+      'description' => 'Counter for summary frequency logic',
+      'required' => FALSE,
+      'default_value' => [['value' => 0]],
+      'settings' => [],
+    ]);
+    $field_config->save();
+  }
+
+  return t('Added summary message count field to AI conversations.');
+}
+
+/**
+ * Update system prompt configuration with generic default prompt.
+ */
+function ai_conversation_update_8005() {
+  // Use PromptManager to update to the generic default system prompt.
+  $prompt_manager = \Drupal::service('ai_conversation.prompt_manager');
+  $prompt_manager->initializeDefaultPrompt();
+  
+  return t('Updated AI conversation system prompt to generic default.');
+}
+
+/**
+ * Add debugging fields to API usage tracking table.
+ */
+function ai_conversation_update_8006() {
+  $schema = \Drupal::database()->schema();
+  $table = 'ai_conversation_api_usage';
+  
+  // Add success status field
+  if (!$schema->fieldExists($table, 'success')) {
+    $schema->addField($table, 'success', [
+      'type' => 'int',
+      'size' => 'tiny',
+      'not null' => FALSE,
+      'default' => 1,
+      'description' => 'Whether the API call succeeded (1) or failed (0)',
+    ]);
+  }
+  
+  // Add error message field
+  if (!$schema->fieldExists($table, 'error_message')) {
+    $schema->addField($table, 'error_message', [
+      'type' => 'text',
+      'size' => 'normal',
+      'not null' => FALSE,
+      'description' => 'Error message if API call failed',
+    ]);
+  }
+  
+  // Add full prompt field for debugging
+  if (!$schema->fieldExists($table, 'prompt_preview')) {
+    $schema->addField($table, 'prompt_preview', [
+      'type' => 'text',
+      'size' => 'big',
+      'not null' => FALSE,
+      'description' => 'Full prompt sent to AI for debugging (stored as MEDIUMTEXT)',
+    ]);
+  }
+  
+  // Add full response field for debugging
+  if (!$schema->fieldExists($table, 'response_preview')) {
+    $schema->addField($table, 'response_preview', [
+      'type' => 'text',
+      'size' => 'big',
+      'not null' => FALSE,
+      'description' => 'Full response from AI for debugging (stored as MEDIUMTEXT)',
+    ]);
+  }
+  
+  return t('Added debugging fields (success, error_message, prompt_preview, response_preview) to API usage tracking table for easier troubleshooting.');
+}
+/**
+ * Add operation-specific max_tokens configuration settings.
+ */
+function ai_conversation_update_8007() {
+  $config = \Drupal::configFactory()->getEditable('ai_conversation.settings');
+  
+  // Set operation-specific max_tokens if not already set
+  if (!$config->get('max_tokens_resume_tailoring')) {
+    $config->set('max_tokens_resume_tailoring', 30000);
+  }
+  if (!$config->get('max_tokens_resume_parsing')) {
+    $config->set('max_tokens_resume_parsing', 20000);
+  }
+  if (!$config->get('max_tokens_cover_letter')) {
+    $config->set('max_tokens_cover_letter', 4000);
+  }
+  if (!$config->get('max_tokens_job_parsing')) {
+    $config->set('max_tokens_job_parsing', 8000);
+  }
+  
+  $config->save();
+  
+  return t('Added operation-specific max_tokens settings: resume_tailoring=30000, resume_parsing=20000, cover_letter=4000, job_parsing=8000');
+}
+
+/**
+ * Normalize NULL field default values to empty sequences for schema compliance.
+ */
+function ai_conversation_update_8008() {
+  $fields_by_bundle = [
+    'ai_conversation' => [
+      'field_messages',
+      'field_context',
+      'field_conversation_summary',
+      'field_summary_updated',
+    ],
+    'community_suggestion' => [
+      'field_suggestion_summary',
+      'field_original_message',
+      'field_conversation_reference',
+      'field_suggestion_category',
+    ],
+  ];
+
+  $updated = 0;
+  foreach ($fields_by_bundle as $bundle => $field_names) {
+    foreach ($field_names as $field_name) {
+      $field_config = FieldConfig::loadByName('node', $bundle, $field_name);
+      if ($field_config && $field_config->get('default_value') === NULL) {
+        $field_config->set('default_value', []);
+        $field_config->save();
+        $updated++;
+      }
+    }
+  }
+
+  return t('Normalized @count field default values for schema compliance.', ['@count' => $updated]);
+}
+
+/**
+ * Ensure API usage debug/cache columns exist.
+ */
+function ai_conversation_update_8009() {
+  $schema = \Drupal::database()->schema();
+  $table = 'ai_conversation_api_usage';
+
+  if (!$schema->tableExists($table)) {
+    return t('Skipped API usage table update because @table does not exist.', ['@table' => $table]);
+  }
+
+  if (!$schema->fieldExists($table, 'success')) {
+    $schema->addField($table, 'success', [
+      'type' => 'int',
+      'size' => 'tiny',
+      'not null' => FALSE,
+      'default' => 1,
+      'description' => 'Whether the API call succeeded (1) or failed (0)',
+    ]);
+  }
+
+  if (!$schema->fieldExists($table, 'error_message')) {
+    $schema->addField($table, 'error_message', [
+      'type' => 'text',
+      'size' => 'normal',
+      'not null' => FALSE,
+      'description' => 'Error message if API call failed',
+    ]);
+  }
+
+  if (!$schema->fieldExists($table, 'prompt_preview')) {
+    $schema->addField($table, 'prompt_preview', [
+      'type' => 'text',
+      'size' => 'big',
+      'not null' => FALSE,
+      'description' => 'Full prompt sent to AI for debugging',
+    ]);
+  }
+
+  if (!$schema->fieldExists($table, 'response_preview')) {
+    $schema->addField($table, 'response_preview', [
+      'type' => 'text',
+      'size' => 'big',
+      'not null' => FALSE,
+      'description' => 'Full response from AI for debugging/cache',
+    ]);
+  }
+
+  return t('Ensured API usage debug/cache columns exist (success, error_message, prompt_preview, response_preview).');
+}
