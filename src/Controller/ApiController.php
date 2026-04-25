@@ -72,7 +72,6 @@ class ApiController extends ControllerBase {
         'type' => 'ai_conversation',
         'title' => $title,
         'uid' => $this->currentUser->id(),
-        'field_ai_model' => $ai_model,
         'field_messages' => [],
         'field_conversation_summary' => '',
         'field_summary_message_count' => 0,

@@ -178,8 +178,8 @@ class AIApiService {
    */
   private function buildBedrockClient(): \Aws\BedrockRuntime\BedrockRuntimeClient {
     $config = $this->configFactory->get('ai_conversation.settings');
-    $aws_access_key = $config->get('aws_access_key_id') ?: getenv('AWS_ACCESS_KEY_ID');
-    $aws_secret_key = $config->get('aws_secret_access_key') ?: getenv('AWS_SECRET_ACCESS_KEY');
+    $aws_access_key = $config->get('aws_access_key_id');
+    $aws_secret_key = $config->get('aws_secret_access_key');
     $aws_region = $config->get('aws_region') ?: 'us-east-1';
 
     $sdk_config = ['region' => $aws_region, 'version' => 'latest'];
@@ -705,8 +705,8 @@ class AIApiService {
       
       // No cache hit - proceed with API call
       $config = $this->configFactory->get('ai_conversation.settings');
-      $aws_access_key = $config->get('aws_access_key_id') ?: getenv('AWS_ACCESS_KEY_ID');
-      $aws_secret_key = $config->get('aws_secret_access_key') ?: getenv('AWS_SECRET_ACCESS_KEY');
+      $aws_access_key = $config->get('aws_access_key_id');
+      $aws_secret_key = $config->get('aws_secret_access_key');
       $aws_region = $config->get('aws_region') ?: 'us-east-1';
 
       $sdk_config = [
@@ -1183,9 +1183,9 @@ class AIApiService {
   public function testConnection() {
     try {
       $config = $this->configFactory->get('ai_conversation.settings');
-      $aws_access_key = $config->get('aws_access_key_id') ?: getenv('AWS_ACCESS_KEY_ID');
-      $aws_secret_key = $config->get('aws_secret_access_key') ?: getenv('AWS_SECRET_ACCESS_KEY');
-      $aws_region = $config->get('aws_region') ?: getenv('AWS_DEFAULT_REGION') ?: 'us-east-1';
+      $aws_access_key = $config->get('aws_access_key_id');
+      $aws_secret_key = $config->get('aws_secret_access_key');
+      $aws_region = $config->get('aws_region') ?: 'us-east-1';
 
       // Check if credentials are configured
       if (empty($aws_access_key) || empty($aws_secret_key)) {
