@@ -110,7 +110,6 @@ ai_conversation.send_message:
     _controller: '\Drupal\ai_conversation\Controller\ChatController::sendMessage'
   requirements:
     _permission: 'use ai conversation'
-    _csrf_token: 'TRUE'
 
 ai_conversation.get_stats:
   path: '/ai-conversation/stats'

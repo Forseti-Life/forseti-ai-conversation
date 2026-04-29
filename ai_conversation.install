@@ -896,3 +896,22 @@ function ai_conversation_update_8009() {
 
   return t('Ensured API usage debug/cache columns exist (success, error_message, prompt_preview, response_preview).');
 }
+
+/**
+ * Grant authenticated users permission to use AI conversations.
+ */
+function ai_conversation_update_8010() {
+  $authenticated_role = \Drupal\user\Entity\Role::load('authenticated');
+  if (!$authenticated_role) {
+    return t('Skipped AI conversation permission update because the authenticated role does not exist.');
+  }
+
+  if ($authenticated_role->hasPermission('use ai conversation')) {
+    return t('Authenticated users already have the use ai conversation permission.');
+  }
+
+  $authenticated_role->grantPermission('use ai conversation');
+  $authenticated_role->save();
+
+  return t('Granted authenticated users the use ai conversation permission.');
+}
