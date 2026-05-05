@@ -12,6 +12,10 @@
 
 The AI Conversation module provides a sophisticated conversational AI interface powered by **AWS Bedrock and Claude 3.5 Sonnet**. It features an intelligent **rolling summary system** that allows for unlimited conversation length while maintaining context efficiency and managing token costs. Each conversation is stored as a Drupal node, enabling persistent, queryable chat history, integration with other modules, and full audit trails. Perfect for project planning, research collaboration, content generation, and complex multi-turn analysis workflows.
 
+## Repository status
+
+This repository is the standalone source of truth for the `ai_conversation` Drupal module. It is versioned independently from `copilot-hq` and should be treated as its own module repo.
+
 ## Features
 
 ### 🤖 AWS Bedrock Integration
