@@ -1,0 +1,23 @@
+# AI Chat menu item removed - now requires authentication
+# Users can access AI Chat directly via URL /ai-chat when logged in
+
+ai_conversation.settings:
+  title: 'AI Conversation Settings'
+  route_name: ai_conversation.settings
+  description: 'Configure GenAI API credentials, models, prompts, and token limits'
+  parent: system.admin_config_services
+  weight: 20
+
+ai_conversation.usage_report:
+  title: 'GenAI API Usage & Costs'
+  route_name: ai_conversation.usage_dashboard
+  description: 'View GenAI API usage statistics, costs, and performance metrics'
+  parent: system.admin_reports
+  weight: 10
+
+ai_conversation.suggestion_tracking:
+  title: 'Suggestion Tracking'
+  route_name: ai_conversation.suggestion_tracking
+  description: 'Track community suggestions and their pipeline status'
+  parent: system.admin_reports
+  weight: 11

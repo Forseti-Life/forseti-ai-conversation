@@ -1,0 +1,63 @@
+ai_conversation.settings:
+  type: config_object
+  label: 'AI Conversation settings'
+  mapping:
+    aws_access_key_id:
+      type: string
+      label: 'AWS Access Key ID'
+    aws_secret_access_key:
+      type: string
+      label: 'AWS Secret Access Key'
+    aws_region:
+      type: string
+      label: 'AWS Region'
+    aws_model:
+      type: string
+      label: 'AWS Bedrock Model ID'
+    system_prompt:
+      type: text
+      label: 'System Prompt'
+    max_tokens:
+      type: integer
+      label: 'Maximum tokens per response'
+    max_tokens_resume_tailoring:
+      type: integer
+      label: 'Maximum tokens for resume tailoring operations'
+    max_tokens_resume_parsing:
+      type: integer
+      label: 'Maximum tokens for resume parsing operations'
+    max_tokens_cover_letter:
+      type: integer
+      label: 'Maximum tokens for cover letter generation'
+    max_tokens_job_parsing:
+      type: integer
+      label: 'Maximum tokens for job posting parsing'
+    max_recent_messages:
+      type: integer
+      label: 'Maximum recent messages to keep'
+    summary_frequency:
+      type: integer
+      label: 'Update summary every N messages'
+    max_tokens_before_summary:
+      type: integer
+      label: 'Maximum tokens before triggering summary update'
+    debug_logging:
+      type: boolean
+      label: 'Enable debug logging'
+
+ai_conversation.provider_settings:
+  type: config_object
+  label: 'AI Provider Settings'
+  mapping:
+    default_provider:
+      type: string
+      label: 'Default AI provider (bedrock or ollama)'
+    ollama_base_url:
+      type: string
+      label: 'Ollama base URL (e.g., http://localhost:11434)'
+    ollama_available_models:
+      type: sequence
+      label: 'Available Ollama model names'
+      sequence:
+        type: string
+        label: 'Model name'

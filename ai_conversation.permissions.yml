@@ -1,0 +1,9 @@
+use ai conversation:
+  title: 'Use AI Conversation'
+  description: 'Allow users to use AI conversation features'
+  restrict access: true
+
+administer ai conversation:
+  title: 'Administer AI Conversation'
+  description: 'Configure AI conversation settings'
+  restrict access: true

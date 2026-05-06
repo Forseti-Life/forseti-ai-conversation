@@ -1,0 +1,26 @@
+chat-interface:
+  version: 1.x
+  css:
+    theme:
+      css/chat-interface.css: {}
+  js:
+    js/chat-interface.js: {}
+  dependencies:
+    - core/jquery
+    - core/drupal
+
+user-conversations-block:
+  version: 1.x
+  css:
+    theme:
+      css/user-conversations-block.css: {}
+  dependencies:
+    - core/drupal
+
+usage-dashboard:
+  version: 1.x
+  css:
+    theme:
+      css/usage-dashboard.css: {}
+  dependencies:
+    - core/drupal
