@@ -16,6 +16,19 @@ The AI Conversation module provides a sophisticated conversational AI interface 
 
 This repository is the standalone source of truth for the `ai_conversation` Drupal module. It is versioned independently from `copilot-hq` and should be treated as its own module repo.
 
+## Bedrock integration points
+
+The active AWS Bedrock integration is centered in the Drupal runtime path below:
+
+- `src/Controller/ChatController.php` receives chat requests and hands message execution to the service layer.
+- `src/Service/AIApiService.php` is the primary Bedrock client surface:
+  - `buildBedrockClient()` creates the `BedrockRuntime` client from Drupal configuration.
+  - `sendMessage()` builds conversation context, selects the effective provider/model, and issues the main `invokeModel()` call for chat responses.
+  - `invokeModelDirect()` provides a reusable direct-invocation path for other module integrations that need tracked Bedrock execution outside the standard chat loop.
+- `src/Form/AIConversationSettingsForm.php` and `config/install/ai_conversation.provider_settings.yml` define the configurable provider/model settings that feed those runtime calls.
+
+If you are auditing or changing Bedrock behavior, start with `AIApiService.php`; that file is the canonical integration point for this module.
+
 ## Features
 
 ### 🤖 AWS Bedrock Integration
