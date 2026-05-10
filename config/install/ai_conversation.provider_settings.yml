@@ -1,7 +1,4 @@
-default_provider: bedrock
-ollama_base_url: ''
+default_provider: ollama
+ollama_base_url: 'http://127.0.0.1:8080'
 ollama_available_models:
-  - llama3
-  - llama3.1
-  - mistral
-  - gemma2
+  - mistral-7b-instruct-v0.2.Q4_K_M.gguf

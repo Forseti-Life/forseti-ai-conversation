@@ -553,45 +553,9 @@ class ChatController extends ControllerBase {
       // Get AI response (this will handle summary generation if needed).
       $ai_response = $this->aiApiService->sendMessage($node, $message);
 
-      // Parse for suggestion creation tags.
-      $suggestion_created = FALSE;
-      if (preg_match('/\[CREATE_SUGGESTION\](.*?)\[\/CREATE_SUGGESTION\]/s', $ai_response, $matches)) {
-        // Extract the suggestion data.
-        $suggestion_text = $matches[1];
-        
-        // Parse Summary, Category, and Original fields.
-        $summary = '';
-        $category = 'general_feedback';
-        $original = $message;
-        
-        if (preg_match('/Summary:\s*(.+?)(?=\nCategory:|$)/s', $suggestion_text, $summary_match)) {
-          $summary = trim($summary_match[1]);
-        }
-        
-        if (preg_match('/Category:\s*(\w+)/i', $suggestion_text, $category_match)) {
-          $category = strtolower(trim($category_match[1]));
-        }
-        
-        if (preg_match('/Original:\s*(.+?)$/s', $suggestion_text, $original_match)) {
-          $original = trim($original_match[1]);
-        }
-        
-        // Create the suggestion node.
-        if (!empty($summary)) {
-          $suggestion = $this->aiApiService->createSuggestion($node, $summary, $original, $category);
-          if ($suggestion) {
-            $suggestion_created = TRUE;
-            \Drupal::logger('ai_conversation')->info('Created suggestion nid @nid from conversation nid @conv_nid', [
-              '@nid' => $suggestion->id(),
-              '@conv_nid' => $node->id(),
-            ]);
-          }
-        }
-        
-        // Remove the tag from the AI response to clean it up for display.
-        $ai_response = preg_replace('/\[CREATE_SUGGESTION\].*?\[\/CREATE_SUGGESTION\]/s', '', $ai_response);
-        $ai_response = trim($ai_response);
-      }
+      $suggestion_result = $this->aiApiService->processSuggestionMarkup($node, $ai_response, $message);
+      $ai_response = $suggestion_result['response'];
+      $suggestion_created = $suggestion_result['suggestion_created'];
 
       // Add AI response to conversation.
       $ai_message = [
@@ -859,6 +823,10 @@ class ChatController extends ControllerBase {
 
       $ai_response = $this->aiApiService->sendMessage($node, $message);
 
+      $suggestion_result = $this->aiApiService->processSuggestionMarkup($node, $ai_response, $message);
+      $ai_response = $suggestion_result['response'];
+      $suggestion_created = $suggestion_result['suggestion_created'];
+
       $ai_message = ['role' => 'assistant', 'content' => $ai_response, 'timestamp' => time()];
       $this->addMessageToNode($node, $ai_message);
       $node->save();
@@ -866,6 +834,7 @@ class ChatController extends ControllerBase {
       $payload = [
         'success' => TRUE,
         'response' => $ai_response,
+        'suggestion_created' => $suggestion_created,
       ];
 
       if ($this->hasJobSuggestionTrigger($message)) {

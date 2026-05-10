@@ -143,35 +143,9 @@ class ApiController extends ControllerBase {
       // Get AI response.
       $ai_response = $this->aiApiService->sendMessage($conversation, $user_message);
 
-      // Check for suggestion creation tag.
-      $suggestion_created = FALSE;
-      if (preg_match('/\[CREATE_SUGGESTION\](.*?)\[\/CREATE_SUGGESTION\]/s', $ai_response, $matches)) {
-        $suggestion_text = $matches[1];
-
-        $summary = '';
-        $category = 'general_feedback';
-        $original = $user_message;
-
-        if (preg_match('/Summary:\s*(.+?)(?=\nCategory:|$)/s', $suggestion_text, $summary_match)) {
-          $summary = trim($summary_match[1]);
-        }
-
-        if (preg_match('/Category:\s*(\w+)/i', $suggestion_text, $category_match)) {
-          $category = strtolower(trim($category_match[1]));
-        }
-
-        if (preg_match('/Original:\s*(.+?)$/s', $suggestion_text, $original_match)) {
-          $original = trim($original_match[1]);
-        }
-
-        if (!empty($summary)) {
-          $suggestion = $this->aiApiService->createSuggestion($conversation, $summary, $original, $category);
-          $suggestion_created = (bool) $suggestion;
-        }
-
-        $ai_response = preg_replace('/\[CREATE_SUGGESTION\].*?\[\/CREATE_SUGGESTION\]/s', '', $ai_response);
-        $ai_response = trim($ai_response);
-      }
+      $suggestion_result = $this->aiApiService->processSuggestionMarkup($conversation, $ai_response, $user_message);
+      $ai_response = $suggestion_result['response'];
+      $suggestion_created = $suggestion_result['suggestion_created'];
 
       return new JsonResponse([
         'response' => $ai_response,

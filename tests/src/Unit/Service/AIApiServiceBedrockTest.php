@@ -4,16 +4,18 @@ namespace Drupal\Tests\ai_conversation\Unit\Service;
 
 use Drupal\Tests\UnitTestCase;
 use Drupal\ai_conversation\Service\AIApiService;
-use Drupal\Core\Config\ConfigFactory;
-use Drupal\Core\Entity\EntityTypeManager;
-use Drupal\Core\Logger\LoggerChannelFactory;
+use Drupal\Core\Config\Config;
+use Drupal\Core\Config\ConfigFactoryInterface;
+use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\ai_conversation\Service\OllamaApiService;
-use Drupal\user\UserData;
+use Drupal\user\UserDataInterface;
 use Drupal\ai_conversation\Service\PromptManager;
 use Drupal\ai_conversation\Service\AIConversationStorageService;
+use Drupal\node\NodeInterface;
 
 /**
- * Unit tests for AIApiService Bedrock configuration path.
+ * Unit tests for AIApiService local provider resolution.
  *
  * @group ai_conversation
  * @coversDefaultClass \Drupal\ai_conversation\Service\AIApiService
@@ -23,21 +25,21 @@ class AIApiServiceBedrockTest extends UnitTestCase {
   /**
    * Mock ConfigFactory.
    *
-   * @var \Drupal\Core\Config\ConfigFactory|\PHPUnit\Framework\MockObject\MockObject
+   * @var \Drupal\Core\Config\ConfigFactoryInterface|\PHPUnit\Framework\MockObject\MockObject
    */
   protected $configFactory;
 
   /**
    * Mock LoggerChannelFactory.
    *
-   * @var \Drupal\Core\Logger\LoggerChannelFactory|\PHPUnit\Framework\MockObject\MockObject
+   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface|\PHPUnit\Framework\MockObject\MockObject
    */
   protected $loggerFactory;
 
   /**
    * Mock EntityTypeManager.
    *
-   * @var \Drupal\Core\Entity\EntityTypeManager|\PHPUnit\Framework\MockObject\MockObject
+   * @var \Drupal\Core\Entity\EntityTypeManagerInterface|\PHPUnit\Framework\MockObject\MockObject
    */
   protected $entityTypeManager;
 
@@ -51,7 +53,7 @@ class AIApiServiceBedrockTest extends UnitTestCase {
   /**
    * Mock UserData.
    *
-   * @var \Drupal\user\UserData|\PHPUnit\Framework\MockObject\MockObject
+   * @var \Drupal\user\UserDataInterface|\PHPUnit\Framework\MockObject\MockObject
    */
   protected $userData;
 
@@ -75,11 +77,11 @@ class AIApiServiceBedrockTest extends UnitTestCase {
   protected function setUp(): void {
     parent::setUp();
 
-    $this->configFactory = $this->createMock(ConfigFactory::class);
-    $this->loggerFactory = $this->createMock(LoggerChannelFactory::class);
-    $this->entityTypeManager = $this->createMock(EntityTypeManager::class);
+    $this->configFactory = $this->createMock(ConfigFactoryInterface::class);
+    $this->loggerFactory = $this->createMock(LoggerChannelFactoryInterface::class);
+    $this->entityTypeManager = $this->createMock(EntityTypeManagerInterface::class);
     $this->ollamaService = $this->createMock(OllamaApiService::class);
-    $this->userData = $this->createMock(UserData::class);
+    $this->userData = $this->createMock(UserDataInterface::class);
     $this->promptManager = $this->createMock(PromptManager::class);
     $this->storageService = $this->createMock(AIConversationStorageService::class);
 
@@ -89,41 +91,41 @@ class AIApiServiceBedrockTest extends UnitTestCase {
   }
 
   /**
-   * Tests that Bedrock client uses config-backed credentials only.
-   *
-   * This test ensures that buildBedrockClient() does not fall back to
-   * environment variables for AWS credentials, which would bypass the
-   * configuration-managed path.
+   * Tests that the default provider resolves to the local model.
    */
-  public function testBedrockClientUsesConfigCredentialsOnly(): void {
-    $mockConfig = $this->createMock(\Drupal\Core\Config\Config::class);
-    
-    // Set up config mock to return credentials
-    $mockConfig->method('get')
+  public function testResolveProviderDefaultsToLocalModel(): void {
+    $settingsConfig = $this->createMock(Config::class);
+    $settingsConfig->method('get')
       ->willReturnMap([
-        ['aws_access_key_id', 'test-access-key'],
-        ['aws_secret_access_key', 'test-secret-key'],
-        ['aws_region', 'us-east-1'],
+        ['max_recent_messages', 20],
+        ['max_tokens_before_summary', 6000],
+        ['summary_frequency', 10],
+      ]);
+
+    $providerConfig = $this->createMock(Config::class);
+    $providerConfig->method('get')
+      ->willReturnMap([
+        ['default_provider', 'ollama'],
       ]);
 
     $this->configFactory->method('get')
-      ->with('ai_conversation.settings')
-      ->willReturn($mockConfig);
+      ->willReturnMap([
+        ['ai_conversation.settings', $settingsConfig],
+        ['ai_conversation.provider_settings', $providerConfig],
+      ]);
+    $this->userData->method('get')->willReturn(NULL);
 
-    // Create service with mocks
     $service = new AIApiService(
       $this->configFactory,
       $this->loggerFactory,
       $this->entityTypeManager,
-      $this->ollamaService,
-      $this->userData,
       $this->promptManager,
-      $this->storageService
+      $this->storageService,
+      $this->ollamaService,
+      $this->userData
     );
 
-    // Verify that the service was created successfully with config-based creds
-    // If env vars were being used as fallback, this would indicate a regression
-    $this->assertInstanceOf(AIApiService::class, $service);
+    $this->assertSame(['provider' => 'ollama', 'model' => NULL], $service->resolveProvider(42));
   }
 
   /**
@@ -141,36 +143,183 @@ class AIApiServiceBedrockTest extends UnitTestCase {
   }
 
   /**
-   * Tests that getAvailableModels() returns proper fallback chain.
-   *
-   * This test ensures that when a model call fails, the system has proper
-   * fallbacks configured for resilience.
+   * Tests that a legacy Bedrock preference is ignored.
    */
-  public function testAvailableModelsHasFallbackChain(): void {
-    $mockConfig = $this->createMock(\Drupal\Core\Config\Config::class);
-    
-    $mockConfig->method('get')
+  public function testLegacyBedrockPreferenceFallsBackToLocal(): void {
+    $settingsConfig = $this->createMock(Config::class);
+    $settingsConfig->method('get')
       ->willReturnMap([
-        ['aws_model', 'us.anthropic.claude-sonnet-4-6'],
-        ['primary_fallback_model', 'anthropic.claude-3-5-sonnet-20241022-v2:0'],
+        ['max_recent_messages', 20],
+        ['max_tokens_before_summary', 6000],
+        ['summary_frequency', 10],
+      ]);
+
+    $providerConfig = $this->createMock(Config::class);
+    $providerConfig->method('get')
+      ->willReturnMap([
+        ['default_provider', 'ollama'],
       ]);
 
     $this->configFactory->method('get')
-      ->with('ai_conversation.settings')
-      ->willReturn($mockConfig);
+      ->willReturnMap([
+        ['ai_conversation.settings', $settingsConfig],
+        ['ai_conversation.provider_settings', $providerConfig],
+      ]);
+    $this->userData->method('get')
+      ->willReturnMap([
+        ['ai_conversation', 42, 'ai_provider', 'bedrock'],
+        ['ai_conversation', 42, 'ai_model', ''],
+      ]);
 
     $service = new AIApiService(
       $this->configFactory,
       $this->loggerFactory,
       $this->entityTypeManager,
-      $this->ollamaService,
-      $this->userData,
       $this->promptManager,
-      $this->storageService
+      $this->storageService,
+      $this->ollamaService,
+      $this->userData
     );
 
-    // Verify service initialized with config
-    $this->assertInstanceOf(AIApiService::class, $service);
+    $this->assertSame(['provider' => 'ollama', 'model' => NULL], $service->resolveProvider(42));
+  }
+
+  /**
+   * Tests that the current user message is not duplicated in chat history.
+   */
+  public function testBuildChatMessagesDoesNotDuplicateCurrentStoredMessage(): void {
+    $settingsConfig = $this->createMock(Config::class);
+    $settingsConfig->method('get')
+      ->willReturnMap([
+        ['max_recent_messages', 20],
+        ['max_tokens_before_summary', 6000],
+        ['summary_frequency', 10],
+      ]);
+
+    $providerConfig = $this->createMock(Config::class);
+    $providerConfig->method('get')
+      ->willReturnMap([
+        ['default_provider', 'ollama'],
+      ]);
+
+    $this->configFactory->method('get')
+      ->willReturnMap([
+        ['ai_conversation.settings', $settingsConfig],
+        ['ai_conversation.provider_settings', $providerConfig],
+      ]);
+
+    $service = new AIApiService(
+      $this->configFactory,
+      $this->loggerFactory,
+      $this->entityTypeManager,
+      $this->promptManager,
+      $this->storageService,
+      $this->ollamaService,
+      $this->userData
+    );
+
+    $field_messages = new class([
+      json_encode(['role' => 'user', 'content' => 'Which model are you?', 'timestamp' => 100]),
+    ]) implements \IteratorAggregate {
+      private array $items;
+
+      public function __construct(array $messages) {
+        $this->items = array_map(function (string $message) {
+          return new class($message) {
+            public string $value;
+
+            public function __construct(string $value) {
+              $this->value = $value;
+            }
+          };
+        }, $messages);
+      }
+
+      public function isEmpty(): bool {
+        return empty($this->items);
+      }
+
+      public function getIterator(): \Traversable {
+        return new \ArrayIterator($this->items);
+      }
+    };
+
+    $conversation = $this->createMock(NodeInterface::class);
+    $conversation->method('hasField')
+      ->willReturnCallback(function (string $field): bool {
+        return $field === 'field_messages';
+      });
+    $conversation->method('get')
+      ->willReturnCallback(function (string $field) use ($field_messages) {
+        return $field === 'field_messages' ? $field_messages : NULL;
+      });
+
+    $method = new \ReflectionMethod(AIApiService::class, 'buildChatMessages');
+    $method->setAccessible(TRUE);
+    $messages = $method->invoke($service, $conversation, 'Which model are you?');
+
+    $this->assertCount(1, $messages);
+    $this->assertSame('user', $messages[0]['role']);
+    $this->assertSame('Which model are you?', $messages[0]['content']);
+  }
+
+  /**
+   * Tests malformed suggestion markup is cleaned from user-visible output.
+   */
+  public function testProcessSuggestionMarkupHandlesMissingClosingTag(): void {
+    $settingsConfig = $this->createMock(Config::class);
+    $settingsConfig->method('get')
+      ->willReturnMap([
+        ['max_recent_messages', 20],
+        ['max_tokens_before_summary', 6000],
+        ['summary_frequency', 10],
+      ]);
+
+    $providerConfig = $this->createMock(Config::class);
+    $providerConfig->method('get')
+      ->willReturnMap([
+        ['default_provider', 'ollama'],
+      ]);
+
+    $this->configFactory->method('get')
+      ->willReturnMap([
+        ['ai_conversation.settings', $settingsConfig],
+        ['ai_conversation.provider_settings', $providerConfig],
+      ]);
+
+    $service = $this->getMockBuilder(AIApiService::class)
+      ->setConstructorArgs([
+        $this->configFactory,
+        $this->loggerFactory,
+        $this->entityTypeManager,
+        $this->promptManager,
+        $this->storageService,
+        $this->ollamaService,
+        $this->userData,
+      ])
+      ->onlyMethods(['createSuggestion'])
+      ->getMock();
+
+    $service->expects($this->once())
+      ->method('createSuggestion')
+      ->willReturn($this->createMock(NodeInterface::class));
+
+    $conversation = $this->createMock(NodeInterface::class);
+    $raw_response = <<<TEXT
+User: "Yes, that's correct."
+
+[CREATE_SUGGESTION]
+Summary: Add a date-based filtering feature for site users
+Category: feature_request
+Original: User suggests adding a date-based filtering feature for site users
+
+Forseti: "Your suggestion has been logged for review. Thank you for the feedback."
+TEXT;
+
+    $result = $service->processSuggestionMarkup($conversation, $raw_response, 'Add date filtering');
+
+    $this->assertTrue($result['suggestion_created']);
+    $this->assertSame('Your suggestion has been logged for review. Thank you for the feedback.', $result['response']);
   }
 
 }

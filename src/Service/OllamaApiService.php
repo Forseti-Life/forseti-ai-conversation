@@ -9,9 +9,16 @@ use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\RequestException;
 
 /**
- * Service for communicating with a self-hosted Ollama LLM instance.
+ * Service for communicating with a self-hosted OpenAI-compatible local LLM.
+ *
+ * The service name remains unchanged for backwards compatibility with existing
+ * container wiring and configuration keys.
  */
 class OllamaApiService {
+
+  public const DEFAULT_BASE_URL = 'http://127.0.0.1:8080';
+
+  public const DEFAULT_MODEL = 'mistral-7b-instruct-v0.2.Q4_K_M.gguf';
 
   /**
    * @var \Drupal\Core\Config\ConfigFactoryInterface
@@ -35,7 +42,7 @@ class OllamaApiService {
   }
 
   /**
-   * Returns TRUE if OLLAMA_BASE_URL is configured and non-empty.
+   * Returns TRUE if the local LLM base URL resolves to a non-empty value.
    */
   public function isConfigured(): bool {
     $url = $this->getBaseUrl();
@@ -43,36 +50,44 @@ class OllamaApiService {
   }
 
   /**
-   * Returns the configured Ollama base URL, or empty string if unset.
+   * Returns the configured local LLM base URL.
    */
   public function getBaseUrl(): string {
     $config = $this->configFactory->get('ai_conversation.provider_settings');
-    return rtrim((string) ($config->get('ollama_base_url') ?: ''), '/');
+    $configured = trim((string) ($config->get('ollama_base_url') ?: ''));
+    return rtrim($configured !== '' ? $configured : self::DEFAULT_BASE_URL, '/');
   }
 
   /**
-   * Returns the list of available Ollama models from config.
+   * Returns the list of available local models from config.
    */
   public function getAvailableModels(): array {
     $config = $this->configFactory->get('ai_conversation.provider_settings');
-    $models = $config->get('ollama_available_models') ?: ['llama3'];
+    $models = $config->get('ollama_available_models') ?: [self::DEFAULT_MODEL];
     return (array) $models;
   }
 
   /**
-   * Tests connectivity by calling /api/tags on the Ollama server.
+   * Tests connectivity by calling /v1/models on the local server.
    *
    * @return array ['success' => bool, 'error' => string, 'models' => array]
    */
   public function testConnection(): array {
     if (!$this->isConfigured()) {
-      return ['success' => FALSE, 'error' => 'OLLAMA_BASE_URL is not configured.', 'models' => []];
+      return ['success' => FALSE, 'error' => 'Local LLM base URL is not configured.', 'models' => []];
     }
     try {
-      $response = $this->httpClient->get($this->getBaseUrl() . '/api/tags', ['timeout' => 5]);
+      $response = $this->httpClient->get($this->getBaseUrl() . '/v1/models', ['timeout' => 5]);
       $body = json_decode($response->getBody()->getContents(), TRUE);
       $models = [];
-      if (isset($body['models']) && is_array($body['models'])) {
+      if (isset($body['data']) && is_array($body['data'])) {
+        foreach ($body['data'] as $model) {
+          if (!empty($model['id'])) {
+            $models[] = $model['id'];
+          }
+        }
+      }
+      elseif (isset($body['models']) && is_array($body['models'])) {
         $models = array_column($body['models'], 'name');
       }
       return ['success' => TRUE, 'error' => '', 'models' => $models];
@@ -89,20 +104,21 @@ class OllamaApiService {
   }
 
   /**
-   * Sends a chat request to Ollama /api/chat.
+   * Sends a chat request to the OpenAI-compatible local endpoint.
    *
-   * @param string $model         Ollama model name (e.g., 'llama3').
+   * @param string $model         Local model name.
    * @param array  $messages      Array of ['role' => ..., 'content' => ...].
    * @param string $system_prompt Optional system prompt prepended as a system message.
    * @param int    $timeout       HTTP timeout in seconds.
+   * @param int|null $max_tokens  Optional response token cap.
    *
    * @return array ['text' => string, 'model' => string] on success.
    *
    * @throws \RuntimeException on connection failure or invalid response.
    */
-  public function chat(string $model, array $messages, string $system_prompt = '', int $timeout = 60): array {
+  public function chat(string $model, array $messages, string $system_prompt = '', int $timeout = 60, ?int $max_tokens = NULL): array {
     if (!$this->isConfigured()) {
-      throw new \RuntimeException('Ollama is not configured. Set OLLAMA_BASE_URL in AI Provider Settings.');
+      throw new \RuntimeException('Local LLM is not configured.');
     }
 
     // Prepend system message if provided.
@@ -119,10 +135,13 @@ class OllamaApiService {
       'messages' => $all_messages,
       'stream' => FALSE,
     ];
+    if ($max_tokens !== NULL && $max_tokens > 0) {
+      $payload['max_tokens'] = $max_tokens;
+    }
 
     try {
       $response = $this->httpClient->post(
-        $this->getBaseUrl() . '/api/chat',
+        $this->getBaseUrl() . '/v1/chat/completions',
         [
           'json' => $payload,
           'timeout' => $timeout,
@@ -130,18 +149,26 @@ class OllamaApiService {
         ]
       );
       $body = json_decode($response->getBody()->getContents(), TRUE);
-      // Ollama non-streaming response shape: {"message": {"role": "assistant", "content": "..."}, "model": "..."}
-      $text = $body['message']['content'] ?? '';
+      $text = $body['choices'][0]['message']['content'] ?? '';
+      if (is_array($text)) {
+        $parts = [];
+        foreach ($text as $part) {
+          if (is_array($part) && isset($part['text'])) {
+            $parts[] = $part['text'];
+          }
+        }
+        $text = implode('', $parts);
+      }
       if ($text === '') {
-        throw new \RuntimeException('Empty response from Ollama.');
+        throw new \RuntimeException('Empty response from local LLM.');
       }
       return ['text' => $text, 'model' => $body['model'] ?? $model];
     }
     catch (ConnectException $e) {
-      throw new \RuntimeException('Ollama unreachable: ' . $e->getMessage(), 0, $e);
+      throw new \RuntimeException('Local LLM unreachable: ' . $e->getMessage(), 0, $e);
     }
     catch (RequestException $e) {
-      throw new \RuntimeException('Ollama request failed: ' . $e->getMessage(), 0, $e);
+      throw new \RuntimeException('Local LLM request failed: ' . $e->getMessage(), 0, $e);
     }
   }
 

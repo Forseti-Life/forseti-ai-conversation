@@ -5,6 +5,7 @@ namespace Drupal\ai_conversation\Form;
 use Drupal\Core\Form\ConfigFormBase;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\ai_conversation\Service\AIApiServiceInterface;
+use Drupal\ai_conversation\Service\OllamaApiService;
 use Drupal\Core\Ajax\AjaxResponse;
 use Drupal\Core\Ajax\HtmlCommand;
 use Symfony\Component\DependencyInjection\ContainerInterface;
@@ -131,29 +132,16 @@ class AIConversationSettingsForm extends ConfigFormBase {
    *   Form element array.
    */
   protected function buildCredentialStatus($config): array {
+    $provider_config = \Drupal::config('ai_conversation.provider_settings');
+    $ollama_service = \Drupal::service('ai_conversation.ollama_api_service');
     $status_items = [];
 
-    // Check AWS credentials
-    if (!empty($config->get('aws_access_key_id'))) {
-      $status_items[] = ['#markup' => $this->t('Using configured AWS credentials')];
-    }
-    elseif (getenv('AWS_ACCESS_KEY_ID')) {
-      $status_items[] = ['#markup' => $this->t('Using AWS_ACCESS_KEY_ID environment variable')];
-    }
-    else {
-      $status_items[] = ['#markup' => $this->t('No AWS credentials found')];
-    }
-
-    // Check AWS region
-    if ($region = $config->get('aws_region')) {
-      $status_items[] = ['#markup' => $this->t('Region from configuration: @region', ['@region' => $region])];
-    }
-    elseif ($env_region = getenv('AWS_DEFAULT_REGION')) {
-      $status_items[] = ['#markup' => $this->t('Region from AWS_DEFAULT_REGION: @region', ['@region' => $env_region])];
-    }
-    else {
-      $status_items[] = ['#markup' => $this->t('Using default region: @region', ['@region' => self::DEFAULT_REGION])];
-    }
+    $status_items[] = ['#markup' => $this->t('Active provider: Local LLM')];
+    $status_items[] = ['#markup' => $this->t('Endpoint: @url', ['@url' => $ollama_service->getBaseUrl()])];
+    $status_items[] = ['#markup' => $this->t('Configured models: @models', [
+      '@models' => implode(', ', (array) ($provider_config->get('ollama_available_models') ?: [OllamaApiService::DEFAULT_MODEL])),
+    ])];
+    $status_items[] = ['#markup' => $this->t('Bedrock integration is disabled.')];
 
     return [
       '#type' => 'item',
@@ -188,7 +176,7 @@ class AIConversationSettingsForm extends ConfigFormBase {
   }
 
   /**
-   * Build AWS Bedrock settings fieldset.
+   * Build model settings fieldset.
    *
    * @param \Drupal\Core\Config\ImmutableConfig $config
    *   The configuration object.
@@ -199,50 +187,12 @@ class AIConversationSettingsForm extends ConfigFormBase {
   protected function buildAwsSettings($config): array {
     $fieldset = [
       '#type' => 'fieldset',
-      '#title' => $this->t('AWS Bedrock Settings'),
-      '#description' => $this->t('Configure your AWS credentials to connect to Bedrock AI services. Leave fields empty to use environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION). <br><strong>Monitor usage:</strong> <a href="@debug_url">GenAI Debug Inspector</a> | <a href="@usage_url">Usage Dashboard</a> | <a href="@pricing_url">Model Pricing</a>', [
+      '#title' => $this->t('Model Settings'),
+      '#description' => $this->t('Conversation traffic uses the local LLM configured on the <a href="@provider_url">AI Provider Settings</a> page. This form now manages shared prompt and token settings only. <br><strong>Monitor usage:</strong> <a href="@debug_url">GenAI Debug Inspector</a> | <a href="@usage_url">Usage Dashboard</a>', [
+        '@provider_url' => '/admin/config/forseti/ai-provider',
         '@debug_url' => '/admin/reports/genai-debug',
         '@usage_url' => '/admin/reports/genai-usage',
-        '@pricing_url' => '/admin/reports/genai-pricing',
       ]),
-    ];
-
-    $fieldset['aws_access_key_id'] = [
-      '#type' => 'textfield',
-      '#title' => $this->t('AWS Access Key ID'),
-      '#default_value' => $config->get('aws_access_key_id'),
-      '#description' => $this->t('Your AWS Access Key ID with permissions to use Bedrock. Leave empty to use AWS_ACCESS_KEY_ID environment variable.'),
-      '#required' => FALSE,
-    ];
-
-    $fieldset['aws_secret_access_key'] = [
-      '#type' => 'password',
-      '#title' => $this->t('AWS Secret Access Key'),
-      '#default_value' => $config->get('aws_secret_access_key'),
-      '#description' => $this->t('Your AWS Secret Access Key. Leave blank to keep current value or use AWS_SECRET_ACCESS_KEY environment variable.'),
-      '#attributes' => ['autocomplete' => 'off'],
-      '#required' => FALSE,
-    ];
-
-    $fieldset['aws_region'] = [
-      '#type' => 'select',
-      '#title' => $this->t('AWS Region'),
-      '#default_value' => $config->get('aws_region') ?: self::DEFAULT_REGION,
-      '#options' => $this->getAwsRegionOptions(),
-      '#description' => $this->t('The AWS region where Bedrock is available.'),
-      '#required' => TRUE,
-    ];
-
-    $fieldset['aws_model'] = [
-      '#type' => 'select',
-      '#title' => $this->t('AI Model'),
-      '#default_value' => $config->get('aws_model') ?: self::DEFAULT_MODEL,
-      '#options' => $this->getModelOptions(),
-      '#description' => $this->t('Select the AI model for conversations. Pricing shown as <strong>Input/Output per 1M tokens</strong>. <br><strong>Example:</strong> A 10K input + 5K output request with Sonnet 4.5 costs: (10K × $3 / 1M) + (5K × $15 / 1M) = $0.03 + $0.075 = <strong>$0.105</strong><br><strong>Recommendation:</strong> Sonnet 4.5 offers the best balance for most tasks. Use Haiku 4.5 for high-volume/simple tasks, Opus 4.6 for complex reasoning.<br><a href="@pricing_url" target="_blank">View detailed pricing comparison →</a> | <a href="@debug_url" target="_blank">Monitor actual usage →</a>', [
-        '@pricing_url' => '/admin/reports/genai-pricing',
-        '@debug_url' => '/admin/reports/genai-debug',
-      ]),
-      '#required' => TRUE,
     ];
 
     $fieldset['system_prompt'] = [
@@ -399,12 +349,12 @@ class AIConversationSettingsForm extends ConfigFormBase {
       '#attributes' => ['class' => ['ai-connection-test']],
       'instructions' => [
         '#type' => 'markup',
-        '#markup' => '<p style="margin-bottom: 15px;"><strong>Click the button below to verify your AWS Bedrock connection.</strong> You will see a clear <strong style="color: green;">✅ PASS</strong> or <strong style="color: red;">❌ FAIL</strong> message.</p>',
+        '#markup' => '<p style="margin-bottom: 15px;"><strong>Click the button below to verify your local LLM connection.</strong> You will see a clear <strong style="color: green;">✅ PASS</strong> or <strong style="color: red;">❌ FAIL</strong> message.</p>',
       ],
       'test_connection' => [
         '#type' => 'submit',
         '#name' => 'test_connection_btn',
-        '#value' => $this->t('🔌 Test AWS Bedrock Connection'),
+        '#value' => $this->t('🔌 Test Local LLM Connection'),
         '#submit' => ['::testConnectionSubmit'],
         '#validate' => [],
         '#limit_validation_errors' => [],
@@ -431,7 +381,7 @@ class AIConversationSettingsForm extends ConfigFormBase {
       ],
       'test_note' => [
         '#type' => 'markup',
-        '#markup' => '<p style="margin-top: 15px; font-size: 12px; color: #666;"><strong>Note:</strong> The first test may take 10-15 seconds as AWS initializes the connection. Subsequent tests will be faster.</p>',
+        '#markup' => '<p style="margin-top: 15px; font-size: 12px; color: #666;"><strong>Note:</strong> The first test may take a few seconds while the local model warms up.</p>',
       ],
     ];
   }
@@ -570,7 +520,7 @@ class AIConversationSettingsForm extends ConfigFormBase {
   }
 
   /**
-   * AJAX callback for testing AWS Bedrock connection.
+   * AJAX callback for testing local LLM connection.
    *
    * @param array $form
    *   The form array.
@@ -582,7 +532,7 @@ class AIConversationSettingsForm extends ConfigFormBase {
    */
   public function testConnectionAjax(array &$form, FormStateInterface $form_state): AjaxResponse {
     $response = new AjaxResponse();
-    $this->logger->info('AWS Bedrock connection test initiated');
+    $this->logger->info('Local LLM connection test initiated');
     
     try {
       $result = $form_state->get('connection_test_result');
@@ -598,7 +548,7 @@ class AIConversationSettingsForm extends ConfigFormBase {
         if (!empty($result['model'])) {
           $detail_html .= ' (Model: ' . htmlspecialchars($result['model']) . ')';
         }
-        $this->logger->notice('AWS Bedrock connection test PASSED');
+        $this->logger->notice('Local LLM connection test PASSED');
       } else {
         $message = (string) ($result['message'] ?? 'Connection failed');
         $is_timeout = stripos($message, 'timeout') !== FALSE;
@@ -607,7 +557,7 @@ class AIConversationSettingsForm extends ConfigFormBase {
         if (!empty($result['details'])) {
           $detail_html .= ' Details: ' . htmlspecialchars($result['details']);
         }
-        $this->logger->error('AWS Bedrock connection test FAILED: @message', ['@message' => $message]);
+        $this->logger->error('Local LLM connection test FAILED: @message', ['@message' => $message]);
       }
     }
     catch (\Exception $e) {
@@ -615,7 +565,7 @@ class AIConversationSettingsForm extends ConfigFormBase {
       $is_timeout = stripos($error_message, 'timeout') !== FALSE;
       $status_html = $is_timeout ? 'Connection: FAIL (TIMEOUT)' : 'Connection: FAIL';
       $detail_html = 'FAIL - ' . htmlspecialchars($error_message);
-      $this->logger->error('AWS Bedrock connection test FAILED with exception: @error', ['@error' => $error_message]);
+      $this->logger->error('Local LLM connection test FAILED with exception: @error', ['@error' => $error_message]);
     }
 
     \Drupal::state()->set('ai_conversation.last_connection_test_status', $status_html);
@@ -636,7 +586,7 @@ class AIConversationSettingsForm extends ConfigFormBase {
    *   The form state.
    */
   public function testConnectionSubmit(array &$form, FormStateInterface $form_state): void {
-    $this->logger->info('AWS Bedrock connection test button clicked from UI (submit handler)');
+    $this->logger->info('Local LLM connection test button clicked from UI (submit handler)');
 
     try {
       $result = $this->aiApiService->testConnection();
@@ -677,28 +627,6 @@ class AIConversationSettingsForm extends ConfigFormBase {
   public function validateForm(array &$form, FormStateInterface $form_state): void {
     parent::validateForm($form, $form_state);
 
-    // Validate AWS credentials
-    $access_key = $form_state->getValue('aws_access_key_id');
-    $secret_key = $form_state->getValue('aws_secret_access_key');
-    $has_env_access_key = !empty(getenv('AWS_ACCESS_KEY_ID'));
-    $has_env_secret_key = !empty(getenv('AWS_SECRET_ACCESS_KEY'));
-    $has_config_access_key = !empty($this->config('ai_conversation.settings')->get('aws_access_key_id'));
-
-    // If access key provided, secret key must also be provided (unless already in config or env)
-    if (!empty($access_key) && empty($secret_key) && !$has_config_access_key && !$has_env_secret_key) {
-      $form_state->setErrorByName(
-        'aws_secret_access_key',
-        $this->t('AWS Secret Access Key is required when providing a new Access Key ID.')
-      );
-    }
-
-    // If neither config values nor environment variables exist, both must be provided
-    if (empty($access_key) && empty($secret_key) && !$has_env_access_key && !$has_config_access_key) {
-      $form_state->setErrorByName(
-        'aws_access_key_id',
-        $this->t('AWS credentials must be provided either in the form or via environment variables.')
-      );
-    }
   }
 
   /**
@@ -716,20 +644,6 @@ class AIConversationSettingsForm extends ConfigFormBase {
 
     $config = $this->config('ai_conversation.settings');
 
-    // AWS credentials
-    $access_key = $form_state->getValue('aws_access_key_id');
-    if (!empty($access_key)) {
-      $config->set('aws_access_key_id', $access_key);
-    }
-
-    $secret_key = $form_state->getValue('aws_secret_access_key');
-    if (!empty($secret_key)) {
-      $config->set('aws_secret_access_key', $secret_key);
-    }
-
-    // AWS settings
-    $config->set('aws_region', $form_state->getValue('aws_region'));
-    $config->set('aws_model', $form_state->getValue('aws_model'));
     $config->set('system_prompt', $form_state->getValue('system_prompt'));
 
     // Conversation settings

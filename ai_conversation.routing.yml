@@ -26,7 +26,7 @@ ai_conversation.model_pricing:
   path: '/admin/reports/genai-pricing'
   defaults:
     _controller: '\Drupal\ai_conversation\Controller\UsageReportController::pricing'
-    _title: 'Claude Model Pricing'
+    _title: 'Model Pricing Reference'
   requirements:
     _permission: 'administer site configuration'
 
@@ -86,7 +86,7 @@ ai_conversation.claude_demo:
   path: '/clauddemo'
   defaults:
     _controller: '\Drupal\ai_conversation\Controller\ChatController::claudeDemo'
-    _title: 'Claude Demo'
+    _title: 'AI Demo'
   requirements:
     _permission: 'use ai conversation'
 

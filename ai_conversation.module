@@ -149,10 +149,9 @@ function ai_conversation_form_user_form_alter(array &$form, \Drupal\Core\Form\Fo
 
   $provider_options = [
     'default' => t('Use site default'),
-    'bedrock' => t('AWS Bedrock (cloud)'),
   ];
   if ($ollama_configured) {
-    $provider_options['ollama'] = t('Ollama (self-hosted)');
+    $provider_options['ollama'] = t('Local LLM (self-hosted)');
   }
 
   $form['ai_provider_preferences'] = [
@@ -169,7 +168,7 @@ function ai_conversation_form_user_form_alter(array &$form, \Drupal\Core\Form\Fo
     '#default_value' => in_array($saved_provider, array_keys($provider_options), TRUE) ? $saved_provider : 'default',
     '#description' => $ollama_configured
       ? t('Choose which AI backend handles your chat requests.')
-      : t('Choose which AI backend handles your chat requests. Ollama is not yet configured by the site admin.'),
+      : t('Choose which AI backend handles your chat requests. The local model server is not yet configured by the site admin.'),
   ];
 
   if (!empty($ollama_models)) {
@@ -179,10 +178,10 @@ function ai_conversation_form_user_form_alter(array &$form, \Drupal\Core\Form\Fo
     }
     $form['ai_provider_preferences']['field_ai_model'] = [
       '#type' => 'select',
-      '#title' => t('Preferred Ollama model'),
+      '#title' => t('Preferred local model'),
       '#options' => $model_opts,
       '#default_value' => $saved_model,
-      '#description' => t('Only applies when Ollama is selected as your provider.'),
+      '#description' => t('Only applies when the local provider is selected.'),
       '#states' => [
         'visible' => [
           ':input[name="field_ai_provider"]' => ['value' => 'ollama'],

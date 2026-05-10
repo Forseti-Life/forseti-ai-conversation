@@ -13,7 +13,7 @@ ai_conversation.settings:
       label: 'AWS Region'
     aws_model:
       type: string
-      label: 'AWS Bedrock Model ID'
+      label: 'Model ID (legacy compatibility only)'
     system_prompt:
       type: text
       label: 'System Prompt'
@@ -51,13 +51,13 @@ ai_conversation.provider_settings:
   mapping:
     default_provider:
       type: string
-      label: 'Default AI provider (bedrock or ollama)'
+      label: 'Default AI provider'
     ollama_base_url:
       type: string
-      label: 'Ollama base URL (e.g., http://localhost:11434)'
+      label: 'Local LLM base URL (e.g., http://127.0.0.1:8080)'
     ollama_available_models:
       type: sequence
-      label: 'Available Ollama model names'
+      label: 'Available local model names'
       sequence:
         type: string
         label: 'Model name'
