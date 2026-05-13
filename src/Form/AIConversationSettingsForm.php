@@ -5,6 +5,7 @@ namespace Drupal\ai_conversation\Form;
 use Drupal\Core\Form\ConfigFormBase;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\ai_conversation\Service\AIApiServiceInterface;
+use Drupal\ai_conversation\Service\DeepSeekApiService;
 use Drupal\ai_conversation\Service\OllamaApiService;
 use Drupal\Core\Ajax\AjaxResponse;
 use Drupal\Core\Ajax\HtmlCommand;
@@ -133,15 +134,21 @@ class AIConversationSettingsForm extends ConfigFormBase {
    */
   protected function buildCredentialStatus($config): array {
     $provider_config = \Drupal::config('ai_conversation.provider_settings');
+    $deepseek_service = \Drupal::service('ai_conversation.deepseek_api_service');
     $ollama_service = \Drupal::service('ai_conversation.ollama_api_service');
     $status_items = [];
+    $default_provider = (string) ($provider_config->get('default_provider') ?: 'deepseek');
 
-    $status_items[] = ['#markup' => $this->t('Active provider: Local LLM')];
-    $status_items[] = ['#markup' => $this->t('Endpoint: @url', ['@url' => $ollama_service->getBaseUrl()])];
-    $status_items[] = ['#markup' => $this->t('Configured models: @models', [
+    $status_items[] = ['#markup' => $this->t('Primary provider: @provider', ['@provider' => strtoupper($default_provider)])];
+    $status_items[] = ['#markup' => $this->t('DeepSeek endpoint: @url', ['@url' => $deepseek_service->getBaseUrl()])];
+    $status_items[] = ['#markup' => $this->t('DeepSeek default model: @model', [
+      '@model' => (string) ($provider_config->get('deepseek_default_model') ?: DeepSeekApiService::DEFAULT_MODEL),
+    ])];
+    $status_items[] = ['#markup' => $this->t('Local fallback endpoint: @url', ['@url' => $ollama_service->getBaseUrl()])];
+    $status_items[] = ['#markup' => $this->t('Local fallback models: @models', [
       '@models' => implode(', ', (array) ($provider_config->get('ollama_available_models') ?: [OllamaApiService::DEFAULT_MODEL])),
     ])];
-    $status_items[] = ['#markup' => $this->t('Bedrock integration is disabled.')];
+    $status_items[] = ['#markup' => $this->t('DeepSeek falls back to the local LLM automatically when unavailable.')];
 
     return [
       '#type' => 'item',

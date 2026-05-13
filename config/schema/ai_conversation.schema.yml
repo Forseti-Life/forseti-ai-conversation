@@ -52,6 +52,21 @@ ai_conversation.provider_settings:
     default_provider:
       type: string
       label: 'Default AI provider'
+    deepseek_base_url:
+      type: string
+      label: 'DeepSeek API base URL'
+    deepseek_api_key:
+      type: string
+      label: 'DeepSeek API key'
+    deepseek_default_model:
+      type: string
+      label: 'Default DeepSeek model'
+    deepseek_available_models:
+      type: sequence
+      label: 'Available DeepSeek model names'
+      sequence:
+        type: string
+        label: 'Model name'
     ollama_base_url:
       type: string
       label: 'Local LLM base URL (e.g., http://127.0.0.1:8080)'

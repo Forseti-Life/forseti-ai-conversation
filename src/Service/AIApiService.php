@@ -8,6 +8,7 @@ use Drupal\node\NodeInterface;
 use Drupal\node\Entity\Node;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\user\UserDataInterface;
+use Drupal\ai_conversation\Service\DeepSeekApiService;
 use Drupal\ai_conversation\Traits\ConfigurableLoggingTrait;
 
 /**
@@ -63,6 +64,11 @@ class AIApiService {
   protected $userData;
 
   /**
+   * @var \Drupal\ai_conversation\Service\DeepSeekApiService|null
+   */
+  protected $deepseekService;
+
+  /**
    * Maximum number of recent messages to keep (configurable).
    *
    * @var int
@@ -86,12 +92,13 @@ class AIApiService {
   /**
    * Constructs a new AIApiService object.
    */
-  public function __construct(ConfigFactoryInterface $config_factory, LoggerChannelFactoryInterface $logger_factory, EntityTypeManagerInterface $entity_type_manager, PromptManager $prompt_manager = NULL, AIConversationStorageService $storage = NULL, OllamaApiService $ollama_service = NULL, UserDataInterface $user_data = NULL) {
+  public function __construct(ConfigFactoryInterface $config_factory, LoggerChannelFactoryInterface $logger_factory, EntityTypeManagerInterface $entity_type_manager, PromptManager $prompt_manager = NULL, AIConversationStorageService $storage = NULL, OllamaApiService $ollama_service = NULL, UserDataInterface $user_data = NULL, DeepSeekApiService $deepseek_service = NULL) {
     $this->configFactory = $config_factory;
     $this->logger = $logger_factory->get('ai_conversation');
     $this->entityTypeManager = $entity_type_manager;
     $this->ollamaService = $ollama_service;
     $this->userData = $user_data;
+    $this->deepseekService = $deepseek_service;
 
     // Inject PromptManager or create one if not provided (for backwards compatibility)
     if ($prompt_manager) {
@@ -130,16 +137,22 @@ class AIApiService {
   }
 
   /**
-   * Returns ordered list of model IDs to try: primary from config, then fallbacks.
+   * Resolves the effective DeepSeek model to use.
    */
-  private function getModelFallbacks(): array {
-    $primary = $this->configFactory->get('ai_conversation.settings')->get('aws_model') ?: 'us.anthropic.claude-sonnet-4-6';
-    $fallbacks = [
-      'us.anthropic.claude-sonnet-4-6',
-      'us.anthropic.claude-haiku-4-5',
-      'us.anthropic.claude-3-5-haiku-20241022-v1:0',
-    ];
-    return array_values(array_unique(array_merge([$primary], $fallbacks)));
+  private function getDeepSeekModelName(?string $preferred_model = NULL): string {
+    $deepseek = $this->deepseekService ?? \Drupal::service('ai_conversation.deepseek_api_service');
+    $models = array_values(array_filter($deepseek->getAvailableModels()));
+    $provider_config = $this->configFactory->get('ai_conversation.provider_settings');
+    $default_model = (string) ($provider_config->get('deepseek_default_model') ?: DeepSeekApiService::DEFAULT_MODEL);
+
+    if ($preferred_model && in_array($preferred_model, $models, TRUE)) {
+      return $preferred_model;
+    }
+    if ($default_model !== '') {
+      return $default_model;
+    }
+
+    return $models[0] ?? DeepSeekApiService::DEFAULT_MODEL;
   }
 
   /**
@@ -149,16 +162,27 @@ class AIApiService {
    * @return array ['provider' => 'ollama', 'model' => string|NULL]
    */
   public function resolveProvider(int $uid): array {
+    $provider_config = $this->configFactory->get('ai_conversation.provider_settings');
+    $default_provider = (string) ($provider_config->get('default_provider') ?: 'deepseek');
+
     // Check user preference via user.data service.
     $ud = $this->userData ?? \Drupal::service('user.data');
     $user_provider = $ud->get('ai_conversation', $uid, 'ai_provider');
     $user_model    = $ud->get('ai_conversation', $uid, 'ai_model');
 
+    if ($user_provider === 'deepseek') {
+      return ['provider' => 'deepseek', 'model' => $user_model ?: NULL];
+    }
+
     if ($user_provider === 'ollama') {
       return ['provider' => 'ollama', 'model' => $user_model ?: NULL];
     }
 
-    return ['provider' => 'ollama', 'model' => NULL];
+    if ($default_provider === 'ollama') {
+      return ['provider' => 'ollama', 'model' => NULL];
+    }
+
+    return ['provider' => 'deepseek', 'model' => NULL];
   }
 
   /**
@@ -209,26 +233,25 @@ class AIApiService {
 
       $this->logInfo('Effective AI provider: @provider', ['@provider' => $effective_provider]);
 
-      $ollama = $this->ollamaService ?? \Drupal::service('ai_conversation.ollama_api_service');
-      $model = $this->getLocalModelName($effective_model);
       $max_tokens = $config->get('max_tokens') ?: 50000;
       $start_time = microtime(true);
-      $ollama_result = $ollama->chat(
-        $model,
+      $provider_result = $this->invokeConfiguredChatProvider(
+        $effective_provider,
+        $effective_model,
         $messages,
         (string) ($system_prompt ?? ''),
-        60,
         $max_tokens
       );
       $duration_ms = (int)((microtime(true) - $start_time) * 1000);
-      $ai_response = $ollama_result['text'];
-      $model = $ollama_result['model'];
+      $ai_response = $provider_result['text'];
+      $model = $provider_result['model'];
+      $effective_provider = $provider_result['provider'];
       $output_tokens = $this->estimateTokens($ai_response);
       $this->updateTokenCount($conversation, $input_tokens + $output_tokens);
       $this->trackApiUsage([
         'module' => 'ai_conversation',
         'operation' => 'chat_message',
-        'model_id' => 'local/' . $model,
+        'model_id' => ($effective_provider === 'deepseek' ? 'deepseek/' : 'local/') . $model,
         'input_tokens' => $input_tokens,
         'output_tokens' => $output_tokens,
         'stop_reason' => 'stop',
@@ -532,10 +555,11 @@ class AIApiService {
    *   Additional context for tracking (e.g., ['job_id' => 123, 'uid' => 1]).
    * @param array $options
    *   Optional parameters:
-   *   - model_id: Override default model
-   *   - max_tokens: Override default max_tokens (default: 8000)
-   *   - system_prompt: Optional system prompt
-   *   - skip_cache: Set to TRUE to bypass cache lookup (default: FALSE)
+       *   - model_id: Override default model
+       *   - provider: Override provider ('deepseek'|'ollama')
+       *   - max_tokens: Override default max_tokens (default: 8000)
+       *   - system_prompt: Optional system prompt
+       *   - skip_cache: Set to TRUE to bypass cache lookup (default: FALSE)
    * 
    * @return array
    *   Response array with keys:
@@ -570,27 +594,32 @@ class AIApiService {
         }
       }
       
-      // No cache hit - proceed with local model call.
-      $ollama = $this->ollamaService ?? \Drupal::service('ai_conversation.ollama_api_service');
-      $model_id = $options['model_id'] ?? $this->getLocalModelName();
+      // No cache hit - proceed with the configured provider, falling back to
+      // the local model if DeepSeek is unavailable.
+      $uid = (int) \Drupal::currentUser()->id();
+      $resolved = $this->resolveProvider($uid);
+      $provider = (string) ($options['provider'] ?? $resolved['provider'] ?? 'deepseek');
+      $preferred_model = (string) ($options['model_id'] ?? $resolved['model'] ?? '');
       $max_tokens = $options['max_tokens'] ?? 8000;
       
-      $this->logInfo('📤 Sending to local model: max_tokens=@max_tokens, model=@model, prompt_chars=@prompt_chars', [
+      $this->logInfo('📤 Sending to configured model provider: provider=@provider, max_tokens=@max_tokens, model=@model, prompt_chars=@prompt_chars', [
+        '@provider' => $provider,
         '@max_tokens' => $max_tokens,
-        '@model' => $model_id,
+        '@model' => $preferred_model !== '' ? $preferred_model : 'auto',
         '@prompt_chars' => strlen($prompt),
       ]);
 
       $start_time = microtime(TRUE);
-      $result = $ollama->chat(
-        $model_id,
+      $result = $this->invokeConfiguredChatProvider(
+        $provider,
+        $preferred_model !== '' ? $preferred_model : NULL,
         [['role' => 'user', 'content' => $prompt]],
         (string) ($options['system_prompt'] ?? ''),
-        60,
         $max_tokens
       );
       $duration_ms = (int)((microtime(TRUE) - $start_time) * 1000);
-      $this->logInfo('📥 Local model response: output_tokens_estimated=@output, duration_ms=@duration', [
+      $this->logInfo('📥 Provider response: provider=@provider, output_tokens_estimated=@output, duration_ms=@duration', [
+        '@provider' => $result['provider'],
         '@output' => $this->estimateTokens($result['text']),
         '@duration' => $duration_ms,
       ]);
@@ -599,11 +628,11 @@ class AIApiService {
       $stop_reason = 'stop';
       $input_tokens = $this->estimateTokens($prompt);
       $output_tokens = $this->estimateTokens($ai_response);
-      $context_data_with_config = $context_data + ['max_tokens' => $max_tokens, 'model_id' => $model_id];
+      $context_data_with_config = $context_data + ['max_tokens' => $max_tokens, 'model_id' => $result['model'], 'provider' => $result['provider']];
       $this->trackApiUsage([
         'module' => $module,
         'operation' => $operation,
-        'model_id' => 'local/' . $model_id,
+        'model_id' => ($result['provider'] === 'deepseek' ? 'deepseek/' : 'local/') . $result['model'],
         'input_tokens' => $input_tokens,
         'output_tokens' => $output_tokens,
         'stop_reason' => $stop_reason,
@@ -624,16 +653,19 @@ class AIApiService {
       ];
       
     } catch (\Exception $e) {
-      $this->logError('Local model invocation failed: @message', ['@message' => $e->getMessage()]);
+      $this->logError('Configured model invocation failed: @message', ['@message' => $e->getMessage()]);
       
       // Track failure - exception
       $max_tokens_for_error = $options['max_tokens'] ?? 8000;
-      $model_id = $options['model_id'] ?? $this->getLocalModelName();
-      $context_data_with_config = $context_data + ['max_tokens' => $max_tokens_for_error, 'model_id' => $model_id];
+      $uid = (int) \Drupal::currentUser()->id();
+      $resolved = $this->resolveProvider($uid);
+      $provider = (string) ($options['provider'] ?? $resolved['provider'] ?? 'deepseek');
+      $model_id = (string) ($options['model_id'] ?? $resolved['model'] ?? ($provider === 'deepseek' ? $this->getDeepSeekModelName() : $this->getLocalModelName()));
+      $context_data_with_config = $context_data + ['max_tokens' => $max_tokens_for_error, 'model_id' => $model_id, 'provider' => $provider];
       $this->trackApiUsage([
         'module' => $module,
         'operation' => $operation,
-        'model_id' => 'local/' . $model_id,
+        'model_id' => ($provider === 'deepseek' ? 'deepseek/' : 'local/') . $model_id,
         'input_tokens' => 0,
         'output_tokens' => 0,
         'stop_reason' => 'error',
@@ -667,6 +699,41 @@ class AIApiService {
    */
   private function getCachedApiResponse(string $module, string $operation, array $context_data) {
     return $this->storage->findCachedResponse($module, $operation, $context_data);
+  }
+
+  /**
+   * Invoke the configured provider, falling back from DeepSeek to local LLM.
+   *
+   * @return array
+   *   ['text' => string, 'model' => string, 'provider' => string]
+   */
+  private function invokeConfiguredChatProvider(string $provider, ?string $preferred_model, array $messages, string $system_prompt, int $max_tokens): array {
+    if ($provider === 'deepseek') {
+      try {
+        $deepseek = $this->deepseekService ?? \Drupal::service('ai_conversation.deepseek_api_service');
+        $model = $this->getDeepSeekModelName($preferred_model);
+        $result = $deepseek->chat($model, $messages, $system_prompt, 60, $max_tokens);
+        return [
+          'text' => $result['text'],
+          'model' => $result['model'],
+          'provider' => 'deepseek',
+        ];
+      }
+      catch (\Exception $e) {
+        $this->logWarning('DeepSeek provider failed, falling back to local LLM: @message', [
+          '@message' => $e->getMessage(),
+        ]);
+      }
+    }
+
+    $ollama = $this->ollamaService ?? \Drupal::service('ai_conversation.ollama_api_service');
+    $model = $this->getLocalModelName($provider === 'ollama' ? $preferred_model : NULL);
+    $result = $ollama->chat($model, $messages, $system_prompt, 60, $max_tokens);
+    return [
+      'text' => $result['text'],
+      'model' => $result['model'],
+      'provider' => 'ollama',
+    ];
   }
 
   /**

@@ -105,7 +105,7 @@ class AIApiServiceBedrockTest extends UnitTestCase {
     $providerConfig = $this->createMock(Config::class);
     $providerConfig->method('get')
       ->willReturnMap([
-        ['default_provider', 'ollama'],
+        ['default_provider', 'deepseek'],
       ]);
 
     $this->configFactory->method('get')
@@ -125,7 +125,7 @@ class AIApiServiceBedrockTest extends UnitTestCase {
       $this->userData
     );
 
-    $this->assertSame(['provider' => 'ollama', 'model' => NULL], $service->resolveProvider(42));
+    $this->assertSame(['provider' => 'deepseek', 'model' => NULL], $service->resolveProvider(42));
   }
 
   /**
@@ -157,7 +157,7 @@ class AIApiServiceBedrockTest extends UnitTestCase {
     $providerConfig = $this->createMock(Config::class);
     $providerConfig->method('get')
       ->willReturnMap([
-        ['default_provider', 'ollama'],
+        ['default_provider', 'deepseek'],
       ]);
 
     $this->configFactory->method('get')
@@ -181,7 +181,7 @@ class AIApiServiceBedrockTest extends UnitTestCase {
       $this->userData
     );
 
-    $this->assertSame(['provider' => 'ollama', 'model' => NULL], $service->resolveProvider(42));
+    $this->assertSame(['provider' => 'deepseek', 'model' => NULL], $service->resolveProvider(42));
   }
 
   /**
