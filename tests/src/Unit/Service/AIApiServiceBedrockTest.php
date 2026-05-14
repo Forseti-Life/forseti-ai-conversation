@@ -8,6 +8,7 @@ use Drupal\Core\Config\Config;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+use Drupal\ai_conversation\Service\DeepSeekApiService;
 use Drupal\ai_conversation\Service\OllamaApiService;
 use Drupal\user\UserDataInterface;
 use Drupal\ai_conversation\Service\PromptManager;
@@ -51,6 +52,13 @@ class AIApiServiceBedrockTest extends UnitTestCase {
   protected $ollamaService;
 
   /**
+   * Mock DeepSeekApiService.
+   *
+   * @var \Drupal\ai_conversation\Service\DeepSeekApiService|\PHPUnit\Framework\MockObject\MockObject
+   */
+  protected $deepseekService;
+
+  /**
    * Mock UserData.
    *
    * @var \Drupal\user\UserDataInterface|\PHPUnit\Framework\MockObject\MockObject
@@ -81,6 +89,7 @@ class AIApiServiceBedrockTest extends UnitTestCase {
     $this->loggerFactory = $this->createMock(LoggerChannelFactoryInterface::class);
     $this->entityTypeManager = $this->createMock(EntityTypeManagerInterface::class);
     $this->ollamaService = $this->createMock(OllamaApiService::class);
+    $this->deepseekService = $this->createMock(DeepSeekApiService::class);
     $this->userData = $this->createMock(UserDataInterface::class);
     $this->promptManager = $this->createMock(PromptManager::class);
     $this->storageService = $this->createMock(AIConversationStorageService::class);
@@ -320,6 +329,155 @@ TEXT;
 
     $this->assertTrue($result['suggestion_created']);
     $this->assertSame('Your suggestion has been logged for review. Thank you for the feedback.', $result['response']);
+  }
+
+  /**
+   * Tests DeepSeek keeps the requested token budget.
+   */
+  public function testApplyProviderTokenCapPreservesDeepSeekBudget(): void {
+    $settingsConfig = $this->createMock(Config::class);
+    $settingsConfig->method('get')
+      ->willReturnMap([
+        ['max_recent_messages', 20],
+        ['max_tokens_before_summary', 6000],
+        ['summary_frequency', 10],
+      ]);
+
+    $providerConfig = $this->createMock(Config::class);
+    $providerConfig->method('get')
+      ->willReturnMap([
+        ['default_provider', 'deepseek'],
+      ]);
+
+    $this->configFactory->method('get')
+      ->willReturnMap([
+        ['ai_conversation.settings', $settingsConfig],
+        ['ai_conversation.provider_settings', $providerConfig],
+      ]);
+
+    $service = new AIApiService(
+      $this->configFactory,
+      $this->loggerFactory,
+      $this->entityTypeManager,
+      $this->promptManager,
+      $this->storageService,
+      $this->ollamaService,
+      $this->userData,
+      $this->deepseekService
+    );
+
+    $method = new \ReflectionMethod(AIApiService::class, 'applyProviderTokenCap');
+    $method->setAccessible(TRUE);
+
+    $this->assertSame(30000, $method->invoke($service, 'deepseek', 30000));
+  }
+
+  /**
+   * Tests localhost is clamped to the safe fallback token budget.
+   */
+  public function testApplyProviderTokenCapClampsLocalBudget(): void {
+    $settingsConfig = $this->createMock(Config::class);
+    $settingsConfig->method('get')
+      ->willReturnMap([
+        ['max_recent_messages', 20],
+        ['max_tokens_before_summary', 6000],
+        ['summary_frequency', 10],
+      ]);
+
+    $providerConfig = $this->createMock(Config::class);
+    $providerConfig->method('get')
+      ->willReturnMap([
+        ['default_provider', 'ollama'],
+      ]);
+
+    $this->configFactory->method('get')
+      ->willReturnMap([
+        ['ai_conversation.settings', $settingsConfig],
+        ['ai_conversation.provider_settings', $providerConfig],
+      ]);
+
+    $service = new AIApiService(
+      $this->configFactory,
+      $this->loggerFactory,
+      $this->entityTypeManager,
+      $this->promptManager,
+      $this->storageService,
+      $this->ollamaService,
+      $this->userData,
+      $this->deepseekService
+    );
+
+    $method = new \ReflectionMethod(AIApiService::class, 'applyProviderTokenCap');
+    $method->setAccessible(TRUE);
+
+    $this->assertSame(2048, $method->invoke($service, 'ollama', 30000));
+  }
+
+  /**
+   * Tests DeepSeek fallback clamps the localhost token budget.
+   */
+  public function testDeepSeekFallbackClampsLocalBudget(): void {
+    $settingsConfig = $this->createMock(Config::class);
+    $settingsConfig->method('get')
+      ->willReturnMap([
+        ['max_recent_messages', 20],
+        ['max_tokens_before_summary', 6000],
+        ['summary_frequency', 10],
+      ]);
+
+    $providerConfig = $this->createMock(Config::class);
+    $providerConfig->method('get')
+      ->willReturnMap([
+        ['default_provider', 'deepseek'],
+        ['deepseek_default_model', 'deepseek-chat'],
+      ]);
+
+    $this->configFactory->method('get')
+      ->willReturnMap([
+        ['ai_conversation.settings', $settingsConfig],
+        ['ai_conversation.provider_settings', $providerConfig],
+      ]);
+
+    $this->deepseekService->expects($this->once())
+      ->method('getAvailableModels')
+      ->willReturn(['deepseek-chat']);
+    $this->deepseekService->expects($this->once())
+      ->method('chat')
+      ->with('deepseek-chat', [['role' => 'user', 'content' => 'Prompt']], '', 60, 30000)
+      ->willThrowException(new \RuntimeException('DeepSeek unavailable'));
+
+    $this->ollamaService->expects($this->once())
+      ->method('getAvailableModels')
+      ->willReturn([OllamaApiService::DEFAULT_MODEL]);
+    $this->ollamaService->expects($this->once())
+      ->method('chat')
+      ->with(OllamaApiService::DEFAULT_MODEL, [['role' => 'user', 'content' => 'Prompt']], '', 60, 2048)
+      ->willReturn(['text' => 'Fallback response', 'model' => OllamaApiService::DEFAULT_MODEL]);
+
+    $service = $this->getMockBuilder(AIApiService::class)
+      ->setConstructorArgs([
+        $this->configFactory,
+        $this->loggerFactory,
+        $this->entityTypeManager,
+        $this->promptManager,
+        $this->storageService,
+        $this->ollamaService,
+        $this->userData,
+        $this->deepseekService,
+      ])
+      ->onlyMethods(['logWarning'])
+      ->getMock();
+
+    $service->expects($this->once())
+      ->method('logWarning');
+
+    $method = new \ReflectionMethod(AIApiService::class, 'invokeConfiguredChatProvider');
+    $method->setAccessible(TRUE);
+    $result = $method->invoke($service, 'deepseek', NULL, [['role' => 'user', 'content' => 'Prompt']], '', 30000);
+
+    $this->assertSame('ollama', $result['provider']);
+    $this->assertSame(2048, $result['max_tokens']);
+    $this->assertSame('Fallback response', $result['text']);
   }
 
 }

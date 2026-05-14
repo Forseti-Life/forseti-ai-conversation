@@ -19,6 +19,11 @@ class AIApiService {
   use ConfigurableLoggingTrait;
 
   /**
+   * Conservative output cap for the current localhost fallback model.
+   */
+  private const LOCAL_FALLBACK_MAX_TOKENS = 2048;
+
+  /**
    * The config factory.
    *
    * @var \Drupal\Core\Config\ConfigFactoryInterface
@@ -186,6 +191,19 @@ class AIApiService {
   }
 
   /**
+   * Applies the provider-specific token cap for the current runtime.
+   */
+  private function applyProviderTokenCap(string $provider, int $requested_max_tokens): int {
+    $requested_max_tokens = max(1, $requested_max_tokens);
+
+    if ($provider === 'deepseek') {
+      return $requested_max_tokens;
+    }
+
+    return min($requested_max_tokens, self::LOCAL_FALLBACK_MAX_TOKENS);
+  }
+
+  /**
    * Builds a configured Bedrock runtime client using system config only.
    */
   private function buildBedrockClient(): \Aws\BedrockRuntime\BedrockRuntimeClient {
@@ -233,19 +251,26 @@ class AIApiService {
 
       $this->logInfo('Effective AI provider: @provider', ['@provider' => $effective_provider]);
 
-      $max_tokens = $config->get('max_tokens') ?: 50000;
+      $requested_max_tokens = (int) ($config->get('max_tokens') ?: 50000);
+      $max_tokens = $this->applyProviderTokenCap($effective_provider, $requested_max_tokens);
       $start_time = microtime(true);
+      $this->logInfo('Token budget resolved for chat message: requested_provider=@provider, requested_max_tokens=@requested, initial_max_tokens=@applied', [
+        '@provider' => $effective_provider,
+        '@requested' => $requested_max_tokens,
+        '@applied' => $max_tokens,
+      ]);
       $provider_result = $this->invokeConfiguredChatProvider(
         $effective_provider,
         $effective_model,
         $messages,
         (string) ($system_prompt ?? ''),
-        $max_tokens
+        $requested_max_tokens
       );
       $duration_ms = (int)((microtime(true) - $start_time) * 1000);
       $ai_response = $provider_result['text'];
       $model = $provider_result['model'];
       $effective_provider = $provider_result['provider'];
+      $max_tokens = (int) ($provider_result['max_tokens'] ?? $max_tokens);
       $output_tokens = $this->estimateTokens($ai_response);
       $this->updateTokenCount($conversation, $input_tokens + $output_tokens);
       $this->trackApiUsage([
@@ -259,6 +284,9 @@ class AIApiService {
         'context_data' => [
           'conversation_id' => $conversation->id(),
           'conversation_title' => $conversation->getTitle(),
+          'provider' => $effective_provider,
+          'requested_max_tokens' => $requested_max_tokens,
+          'max_tokens' => $max_tokens,
         ],
         'success' => TRUE,
         'prompt' => $context,
@@ -280,6 +308,9 @@ class AIApiService {
         'context_data' => [
           'conversation_id' => $conversation->id(),
           'conversation_title' => $conversation->getTitle(),
+          'provider' => $effective_provider ?? 'unknown',
+          'requested_max_tokens' => $requested_max_tokens ?? NULL,
+          'max_tokens' => $max_tokens ?? NULL,
         ],
         'success' => FALSE,
         'error_message' => $e->getMessage(),
@@ -600,10 +631,12 @@ class AIApiService {
       $resolved = $this->resolveProvider($uid);
       $provider = (string) ($options['provider'] ?? $resolved['provider'] ?? 'deepseek');
       $preferred_model = (string) ($options['model_id'] ?? $resolved['model'] ?? '');
-      $max_tokens = $options['max_tokens'] ?? 8000;
+      $requested_max_tokens = (int) ($options['max_tokens'] ?? 8000);
+      $max_tokens = $this->applyProviderTokenCap($provider, $requested_max_tokens);
       
-      $this->logInfo('📤 Sending to configured model provider: provider=@provider, max_tokens=@max_tokens, model=@model, prompt_chars=@prompt_chars', [
+      $this->logInfo('📤 Sending to configured model provider: provider=@provider, requested_max_tokens=@requested_max_tokens, initial_max_tokens=@max_tokens, model=@model, prompt_chars=@prompt_chars', [
         '@provider' => $provider,
+        '@requested_max_tokens' => $requested_max_tokens,
         '@max_tokens' => $max_tokens,
         '@model' => $preferred_model !== '' ? $preferred_model : 'auto',
         '@prompt_chars' => strlen($prompt),
@@ -615,9 +648,10 @@ class AIApiService {
         $preferred_model !== '' ? $preferred_model : NULL,
         [['role' => 'user', 'content' => $prompt]],
         (string) ($options['system_prompt'] ?? ''),
-        $max_tokens
+        $requested_max_tokens
       );
       $duration_ms = (int)((microtime(TRUE) - $start_time) * 1000);
+      $max_tokens = (int) ($result['max_tokens'] ?? $max_tokens);
       $this->logInfo('📥 Provider response: provider=@provider, output_tokens_estimated=@output, duration_ms=@duration', [
         '@provider' => $result['provider'],
         '@output' => $this->estimateTokens($result['text']),
@@ -628,7 +662,7 @@ class AIApiService {
       $stop_reason = 'stop';
       $input_tokens = $this->estimateTokens($prompt);
       $output_tokens = $this->estimateTokens($ai_response);
-      $context_data_with_config = $context_data + ['max_tokens' => $max_tokens, 'model_id' => $result['model'], 'provider' => $result['provider']];
+      $context_data_with_config = $context_data + ['requested_max_tokens' => $requested_max_tokens, 'max_tokens' => $max_tokens, 'model_id' => $result['model'], 'provider' => $result['provider']];
       $this->trackApiUsage([
         'module' => $module,
         'operation' => $operation,
@@ -656,12 +690,13 @@ class AIApiService {
       $this->logError('Configured model invocation failed: @message', ['@message' => $e->getMessage()]);
       
       // Track failure - exception
-      $max_tokens_for_error = $options['max_tokens'] ?? 8000;
+      $requested_max_tokens_for_error = (int) ($options['max_tokens'] ?? 8000);
       $uid = (int) \Drupal::currentUser()->id();
       $resolved = $this->resolveProvider($uid);
       $provider = (string) ($options['provider'] ?? $resolved['provider'] ?? 'deepseek');
+      $max_tokens_for_error = $this->applyProviderTokenCap($provider, $requested_max_tokens_for_error);
       $model_id = (string) ($options['model_id'] ?? $resolved['model'] ?? ($provider === 'deepseek' ? $this->getDeepSeekModelName() : $this->getLocalModelName()));
-      $context_data_with_config = $context_data + ['max_tokens' => $max_tokens_for_error, 'model_id' => $model_id, 'provider' => $provider];
+      $context_data_with_config = $context_data + ['requested_max_tokens' => $requested_max_tokens_for_error, 'max_tokens' => $max_tokens_for_error, 'model_id' => $model_id, 'provider' => $provider];
       $this->trackApiUsage([
         'module' => $module,
         'operation' => $operation,
@@ -705,34 +740,40 @@ class AIApiService {
    * Invoke the configured provider, falling back from DeepSeek to local LLM.
    *
    * @return array
-   *   ['text' => string, 'model' => string, 'provider' => string]
+   *   ['text' => string, 'model' => string, 'provider' => string, 'max_tokens' => int]
    */
   private function invokeConfiguredChatProvider(string $provider, ?string $preferred_model, array $messages, string $system_prompt, int $max_tokens): array {
     if ($provider === 'deepseek') {
       try {
         $deepseek = $this->deepseekService ?? \Drupal::service('ai_conversation.deepseek_api_service');
         $model = $this->getDeepSeekModelName($preferred_model);
-        $result = $deepseek->chat($model, $messages, $system_prompt, 60, $max_tokens);
+        $deepseek_max_tokens = $this->applyProviderTokenCap('deepseek', $max_tokens);
+        $result = $deepseek->chat($model, $messages, $system_prompt, 60, $deepseek_max_tokens);
         return [
           'text' => $result['text'],
           'model' => $result['model'],
           'provider' => 'deepseek',
+          'max_tokens' => $deepseek_max_tokens,
         ];
       }
       catch (\Exception $e) {
-        $this->logWarning('DeepSeek provider failed, falling back to local LLM: @message', [
+        $ollama_max_tokens = $this->applyProviderTokenCap('ollama', $max_tokens);
+        $this->logWarning('DeepSeek provider failed, falling back to local LLM with max_tokens=@max_tokens: @message', [
           '@message' => $e->getMessage(),
+          '@max_tokens' => $ollama_max_tokens,
         ]);
       }
     }
 
     $ollama = $this->ollamaService ?? \Drupal::service('ai_conversation.ollama_api_service');
     $model = $this->getLocalModelName($provider === 'ollama' ? $preferred_model : NULL);
-    $result = $ollama->chat($model, $messages, $system_prompt, 60, $max_tokens);
+    $ollama_max_tokens = $this->applyProviderTokenCap('ollama', $max_tokens);
+    $result = $ollama->chat($model, $messages, $system_prompt, 60, $ollama_max_tokens);
     return [
       'text' => $result['text'],
       'model' => $result['model'],
       'provider' => 'ollama',
+      'max_tokens' => $ollama_max_tokens,
     ];
   }
 
