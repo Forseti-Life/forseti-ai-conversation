@@ -273,9 +273,9 @@ class AIApiServiceBedrockTest extends UnitTestCase {
   }
 
   /**
-   * Tests malformed suggestion markup is cleaned from user-visible output.
+   * Tests suggestion markup creates a suggestion after explicit confirmation.
    */
-  public function testProcessSuggestionMarkupHandlesMissingClosingTag(): void {
+  public function testProcessSuggestionMarkupCreatesSuggestionAfterExplicitConfirmation(): void {
     $settingsConfig = $this->createMock(Config::class);
     $settingsConfig->method('get')
       ->willReturnMap([
@@ -315,6 +315,69 @@ class AIApiServiceBedrockTest extends UnitTestCase {
 
     $conversation = $this->createMock(NodeInterface::class);
     $raw_response = <<<TEXT
+[CREATE_SUGGESTION]
+Summary: Add a date-based filtering feature for site users
+Category: feature_request
+Original: User suggests adding a date-based filtering feature for site users
+[/CREATE_SUGGESTION]
+
+Your suggestion has been logged for review. Thank you for the feedback.
+TEXT;
+
+    $result = $service->processSuggestionMarkup($conversation, $raw_response, 'yes, submit it');
+
+    $this->assertTrue($result['suggestion_created']);
+    $this->assertSame('Your suggestion has been logged for review. Thank you for the feedback.', $result['response']);
+  }
+
+  /**
+   * Tests transcript-style examples do not create suggestions.
+   */
+  public function testProcessSuggestionMarkupIgnoresTranscriptWrappedSuggestionBlock(): void {
+    $settingsConfig = $this->createMock(Config::class);
+    $settingsConfig->method('get')
+      ->willReturnMap([
+        ['max_recent_messages', 20],
+        ['max_tokens_before_summary', 6000],
+        ['summary_frequency', 10],
+      ]);
+
+    $providerConfig = $this->createMock(Config::class);
+    $providerConfig->method('get')
+      ->willReturnMap([
+        ['default_provider', 'ollama'],
+      ]);
+
+    $this->configFactory->method('get')
+      ->willReturnMap([
+        ['ai_conversation.settings', $settingsConfig],
+        ['ai_conversation.provider_settings', $providerConfig],
+      ]);
+
+    $service = $this->getMockBuilder(AIApiService::class)
+      ->setConstructorArgs([
+        $this->configFactory,
+        $this->loggerFactory,
+        $this->entityTypeManager,
+        $this->promptManager,
+        $this->storageService,
+        $this->ollamaService,
+        $this->userData,
+      ])
+      ->onlyMethods(['createSuggestion'])
+      ->getMock();
+
+    $service->expects($this->never())
+      ->method('createSuggestion');
+
+    $conversation = $this->createMock(NodeInterface::class);
+    $raw_response = <<<TEXT
+ greetings! I am Forseti, your helpful assistant embedded in this Drupal site.
+
+User: "Hey Forseti, I've been using this site for a while and I think it would be great if we could add a feature to allow users to filter content by date."
+
+Forseti: "Understood, you're suggesting adding a date-based filtering feature for site users. Would you like this formally submitted as a feature request?"
+
 User: "Yes, that's correct."
 
 [CREATE_SUGGESTION]
@@ -325,10 +388,11 @@ Original: User suggests adding a date-based filtering feature for site users
 Forseti: "Your suggestion has been logged for review. Thank you for the feedback."
 TEXT;
 
-    $result = $service->processSuggestionMarkup($conversation, $raw_response, 'Add date filtering');
+    $result = $service->processSuggestionMarkup($conversation, $raw_response, 'TEST');
 
-    $this->assertTrue($result['suggestion_created']);
-    $this->assertSame('Your suggestion has been logged for review. Thank you for the feedback.', $result['response']);
+    $this->assertFalse($result['suggestion_created']);
+    $this->assertStringNotContainsString('[CREATE_SUGGESTION]', $result['response']);
+    $this->assertStringContainsString('Would you like this formally submitted as a feature request?', $result['response']);
   }
 
   /**

@@ -1268,13 +1268,15 @@ class AIApiService {
       $original = trim($original_match[1]);
     }
 
-    $suggestion_created = FALSE;
-    if ($summary !== '') {
-      $suggestion_created = (bool) $this->createSuggestion($conversation, $summary, $original, $category);
-    }
-
     $cleaned_parts = array_values(array_filter([$before, $after], static fn($value) => $value !== ''));
     $cleaned_response = trim(implode("\n\n", $cleaned_parts));
+    $has_transcript_wrapper = preg_match('/(^|\n)\s*(User|Assistant|Human|Forseti):/m', $before) || preg_match('/(^|\n)\s*(User|Assistant|Human|Forseti):/m', $after);
+    $has_explicit_confirmation = $this->hasExplicitSuggestionConfirmation($original_message);
+
+    $suggestion_created = FALSE;
+    if ($summary !== '' && $has_explicit_confirmation && !$has_transcript_wrapper) {
+      $suggestion_created = (bool) $this->createSuggestion($conversation, $summary, $original, $category);
+    }
 
     if ($suggestion_created && ($cleaned_response === '' || preg_match('/(^|\n)\s*(User|Assistant|Human|Forseti):/m', $cleaned_response))) {
       $cleaned_response = $default_confirmation;
@@ -1284,6 +1286,25 @@ class AIApiService {
       'response' => $cleaned_response !== '' ? $cleaned_response : trim($ai_response),
       'suggestion_created' => $suggestion_created,
     ];
+  }
+
+  /**
+   * Returns TRUE when the user message explicitly confirms suggestion submission.
+   */
+  private function hasExplicitSuggestionConfirmation(string $message): bool {
+    $normalized = mb_strtolower($message);
+    $normalized = preg_replace('/[^\p{L}\p{N}\s]+/u', ' ', $normalized);
+    $normalized = preg_replace('/\s+/u', ' ', trim($normalized));
+
+    if ($normalized === '') {
+      return FALSE;
+    }
+
+    if (preg_match('/\b(no|not|dont|don t|do not|cancel|stop|wait)\b/u', $normalized)) {
+      return FALSE;
+    }
+
+    return (bool) preg_match('/^(yes|yep|yeah|sure|ok|okay|correct|confirmed|submit|submit it|please submit|please submit it|please do|go ahead|sounds good|that s correct|that is correct|that s right|that is right|yes submit it|yes please submit it)$/u', $normalized);
   }
 
 }
