@@ -7,21 +7,14 @@ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\node\NodeInterface;
 use Drupal\node\Entity\Node;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
-use Drupal\user\UserDataInterface;
-use Drupal\ai_conversation\Service\DeepSeekApiService;
 use Drupal\ai_conversation\Traits\ConfigurableLoggingTrait;
 
 /**
- * Service for AI API communication using the local LLM with rolling summaries.
+ * Service for AI API communication using AWS Bedrock with rolling conversation summary.
  */
 class AIApiService {
 
   use ConfigurableLoggingTrait;
-
-  /**
-   * Conservative output cap for the current localhost fallback model.
-   */
-  private const LOCAL_FALLBACK_MAX_TOKENS = 2048;
 
   /**
    * The config factory.
@@ -52,28 +45,6 @@ class AIApiService {
   protected $promptManager;
 
   /**
-   * The AI conversation storage service.
-   *
-   * @var \Drupal\ai_conversation\Service\AIConversationStorageService
-   */
-  protected $storage;
-
-  /**
-   * @var \Drupal\ai_conversation\Service\OllamaApiService|null
-   */
-  protected $ollamaService;
-
-  /**
-   * @var \Drupal\user\UserDataInterface|null
-   */
-  protected $userData;
-
-  /**
-   * @var \Drupal\ai_conversation\Service\DeepSeekApiService|null
-   */
-  protected $deepseekService;
-
-  /**
    * Maximum number of recent messages to keep (configurable).
    *
    * @var int
@@ -97,27 +68,17 @@ class AIApiService {
   /**
    * Constructs a new AIApiService object.
    */
-  public function __construct(ConfigFactoryInterface $config_factory, LoggerChannelFactoryInterface $logger_factory, EntityTypeManagerInterface $entity_type_manager, PromptManager $prompt_manager = NULL, AIConversationStorageService $storage = NULL, OllamaApiService $ollama_service = NULL, UserDataInterface $user_data = NULL, DeepSeekApiService $deepseek_service = NULL) {
+  public function __construct(ConfigFactoryInterface $config_factory, LoggerChannelFactoryInterface $logger_factory, EntityTypeManagerInterface $entity_type_manager, PromptManager $prompt_manager = NULL) {
     $this->configFactory = $config_factory;
     $this->logger = $logger_factory->get('ai_conversation');
     $this->entityTypeManager = $entity_type_manager;
-    $this->ollamaService = $ollama_service;
-    $this->userData = $user_data;
-    $this->deepseekService = $deepseek_service;
-
+    
     // Inject PromptManager or create one if not provided (for backwards compatibility)
     if ($prompt_manager) {
       $this->promptManager = $prompt_manager;
     } else {
       // Fallback for contexts where DI isn't available
       $this->promptManager = \Drupal::service('ai_conversation.prompt_manager');
-    }
-
-    // Inject storage service or resolve lazily for backwards compatibility.
-    if ($storage) {
-      $this->storage = $storage;
-    } else {
-      $this->storage = \Drupal::service('ai_conversation.storage');
     }
     
     // Load configuration.
@@ -128,79 +89,16 @@ class AIApiService {
   }
 
   /**
-   * Resolves the effective local model to use.
+   * Returns ordered list of model IDs to try: primary from config, then fallbacks.
    */
-  private function getLocalModelName(?string $preferred_model = NULL): string {
-    $ollama = $this->ollamaService ?? \Drupal::service('ai_conversation.ollama_api_service');
-    $models = array_values(array_filter($ollama->getAvailableModels()));
-
-    if ($preferred_model && in_array($preferred_model, $models, TRUE)) {
-      return $preferred_model;
-    }
-
-    return $models[0] ?? OllamaApiService::DEFAULT_MODEL;
-  }
-
-  /**
-   * Resolves the effective DeepSeek model to use.
-   */
-  private function getDeepSeekModelName(?string $preferred_model = NULL): string {
-    $deepseek = $this->deepseekService ?? \Drupal::service('ai_conversation.deepseek_api_service');
-    $models = array_values(array_filter($deepseek->getAvailableModels()));
-    $provider_config = $this->configFactory->get('ai_conversation.provider_settings');
-    $default_model = (string) ($provider_config->get('deepseek_default_model') ?: DeepSeekApiService::DEFAULT_MODEL);
-
-    if ($preferred_model && in_array($preferred_model, $models, TRUE)) {
-      return $preferred_model;
-    }
-    if ($default_model !== '') {
-      return $default_model;
-    }
-
-    return $models[0] ?? DeepSeekApiService::DEFAULT_MODEL;
-  }
-
-  /**
-   * Resolves the effective provider for the given uid.
-   * Resolution order: user preference → org default → local provider fallback.
-   *
-   * @return array ['provider' => 'ollama', 'model' => string|NULL]
-   */
-  public function resolveProvider(int $uid): array {
-    $provider_config = $this->configFactory->get('ai_conversation.provider_settings');
-    $default_provider = (string) ($provider_config->get('default_provider') ?: 'deepseek');
-
-    // Check user preference via user.data service.
-    $ud = $this->userData ?? \Drupal::service('user.data');
-    $user_provider = $ud->get('ai_conversation', $uid, 'ai_provider');
-    $user_model    = $ud->get('ai_conversation', $uid, 'ai_model');
-
-    if ($user_provider === 'deepseek') {
-      return ['provider' => 'deepseek', 'model' => $user_model ?: NULL];
-    }
-
-    if ($user_provider === 'ollama') {
-      return ['provider' => 'ollama', 'model' => $user_model ?: NULL];
-    }
-
-    if ($default_provider === 'ollama') {
-      return ['provider' => 'ollama', 'model' => NULL];
-    }
-
-    return ['provider' => 'deepseek', 'model' => NULL];
-  }
-
-  /**
-   * Applies the provider-specific token cap for the current runtime.
-   */
-  private function applyProviderTokenCap(string $provider, int $requested_max_tokens): int {
-    $requested_max_tokens = max(1, $requested_max_tokens);
-
-    if ($provider === 'deepseek') {
-      return $requested_max_tokens;
-    }
-
-    return min($requested_max_tokens, self::LOCAL_FALLBACK_MAX_TOKENS);
+  private function getModelFallbacks(): array {
+    $primary = $this->configFactory->get('ai_conversation.settings')->get('aws_model') ?: 'us.anthropic.claude-sonnet-4-6';
+    $fallbacks = [
+      'us.anthropic.claude-sonnet-4-6',
+      'us.anthropic.claude-haiku-4-5',
+      'us.anthropic.claude-3-5-haiku-20241022-v1:0',
+    ];
+    return array_values(array_unique(array_merge([$primary], $fallbacks)));
   }
 
   /**
@@ -208,8 +106,8 @@ class AIApiService {
    */
   private function buildBedrockClient(): \Aws\BedrockRuntime\BedrockRuntimeClient {
     $config = $this->configFactory->get('ai_conversation.settings');
-    $aws_access_key = $config->get('aws_access_key_id');
-    $aws_secret_key = $config->get('aws_secret_access_key');
+    $aws_access_key = $config->get('aws_access_key_id') ?: getenv('AWS_ACCESS_KEY_ID');
+    $aws_secret_key = $config->get('aws_secret_access_key') ?: getenv('AWS_SECRET_ACCESS_KEY');
     $aws_region = $config->get('aws_region') ?: 'us-east-1';
 
     $sdk_config = ['region' => $aws_region, 'version' => 'latest'];
@@ -229,71 +127,128 @@ class AIApiService {
       $this->checkAndUpdateSummary($conversation);
 
       $config = $this->configFactory->get('ai_conversation.settings');
+      $bedrock = $this->buildBedrockClient();
+      $models_to_try = $this->getModelFallbacks();
+      $model = $models_to_try[0];
 
-      $messages = $this->buildChatMessages($conversation, $message);
-      $system_prompt = $this->buildSystemPrompt($conversation);
-      $context = $this->buildPromptPreview($system_prompt, $messages);
-
+      // Build the optimized conversation context (summary + recent messages).
+      $context = $this->buildOptimizedContext($conversation, $message);
+      
       // Estimate input tokens.
       $input_tokens = $this->estimateTokens($context);
 
+      // Get max tokens from config.
+      $max_tokens = $config->get('max_tokens') ?: 50000;
+
+      // Get system prompt from PromptManager with optional dynamic content from node 10
+      $system_prompt = $this->promptManager->getSystemPrompt(10);
+      
       // Debug logging for system prompt
       $this->logInfo('System prompt length: @length, First 100 chars: @preview', [
         '@length' => strlen($system_prompt ?? ''),
         '@preview' => substr($system_prompt ?? 'EMPTY', 0, 100),
       ]);
 
-      // Resolve provider: user preference → org default → local provider.
-      $uid = (int) \Drupal::currentUser()->id();
-      $resolved = $this->resolveProvider($uid);
-      $effective_provider = $resolved['provider'];
-      $effective_model    = $resolved['model'];
+      // Build the request body.
+      $request_body = [
+        'anthropic_version' => 'bedrock-2023-05-31',
+        'max_tokens' => $max_tokens,
+        'messages' => [
+          [
+            'role' => 'user',
+            'content' => $context
+          ]
+        ]
+      ];
 
-      $this->logInfo('Effective AI provider: @provider', ['@provider' => $effective_provider]);
+      // Add system prompt if configured.
+      if (!empty($system_prompt)) {
+        $request_body['system'] = $system_prompt;
+        $this->logInfo('System prompt added to request body');
+      } else {
+        $this->logInfo('No system prompt found in configuration');
+      }
 
-      $requested_max_tokens = (int) ($config->get('max_tokens') ?: 50000);
-      $max_tokens = $this->applyProviderTokenCap($effective_provider, $requested_max_tokens);
       $start_time = microtime(true);
-      $this->logInfo('Token budget resolved for chat message: requested_provider=@provider, requested_max_tokens=@requested, initial_max_tokens=@applied', [
-        '@provider' => $effective_provider,
-        '@requested' => $requested_max_tokens,
-        '@applied' => $max_tokens,
-      ]);
-      $provider_result = $this->invokeConfiguredChatProvider(
-        $effective_provider,
-        $effective_model,
-        $messages,
-        (string) ($system_prompt ?? ''),
-        $requested_max_tokens
-      );
+
+      // Try models in fallback order.
+      $last_exception = NULL;
+      $response = NULL;
+      foreach ($models_to_try as $candidate_model) {
+        try {
+          $response = $bedrock->invokeModel([
+            'modelId' => $candidate_model,
+            'body' => json_encode($request_body),
+          ]);
+          $model = $candidate_model;
+          $last_exception = NULL;
+          break;
+        } catch (\Aws\Exception\AwsException $e) {
+          $this->logError('Model @model failed (@code), trying next. Error: @msg', [
+            '@model' => $candidate_model,
+            '@code' => $e->getAwsErrorCode(),
+            '@msg' => $e->getMessage(),
+          ]);
+          $last_exception = $e;
+        }
+      }
+      if ($last_exception !== NULL) {
+        throw $last_exception;
+      }
+
       $duration_ms = (int)((microtime(true) - $start_time) * 1000);
-      $ai_response = $provider_result['text'];
-      $model = $provider_result['model'];
-      $effective_provider = $provider_result['provider'];
-      $max_tokens = (int) ($provider_result['max_tokens'] ?? $max_tokens);
-      $output_tokens = $this->estimateTokens($ai_response);
-      $this->updateTokenCount($conversation, $input_tokens + $output_tokens);
+
+      $result = json_decode($response['body']->getContents(), true);
+      
+      if (isset($result['content'][0]['text'])) {
+        $ai_response = $result['content'][0]['text'];
+        $stop_reason = $result['stop_reason'] ?? 'unknown';
+        
+        // Estimate output tokens and update total.
+        $output_tokens = $this->estimateTokens($ai_response);
+        $this->updateTokenCount($conversation, $input_tokens + $output_tokens);
+        
+        // Track API usage (success case)
+        $this->trackApiUsage([
+          'module' => 'ai_conversation',
+          'operation' => 'chat_message',
+          'model_id' => $model,
+          'input_tokens' => $input_tokens,
+          'output_tokens' => $output_tokens,
+          'stop_reason' => $stop_reason,
+          'duration_ms' => $duration_ms,
+          'context_data' => [
+            'conversation_id' => $conversation->id(),
+            'conversation_title' => $conversation->getTitle(),
+          ],
+          'success' => TRUE,
+          'prompt' => $context,
+          'response' => $ai_response,
+        ]);
+        
+        return $ai_response;
+      }
+      
+      // Track failure - unexpected response format
       $this->trackApiUsage([
         'module' => 'ai_conversation',
         'operation' => 'chat_message',
-        'model_id' => ($effective_provider === 'deepseek' ? 'deepseek/' : 'local/') . $model,
+        'model_id' => $model,
         'input_tokens' => $input_tokens,
-        'output_tokens' => $output_tokens,
-        'stop_reason' => 'stop',
+        'output_tokens' => 0,
+        'stop_reason' => 'error',
         'duration_ms' => $duration_ms,
         'context_data' => [
           'conversation_id' => $conversation->id(),
           'conversation_title' => $conversation->getTitle(),
-          'provider' => $effective_provider,
-          'requested_max_tokens' => $requested_max_tokens,
-          'max_tokens' => $max_tokens,
         ],
-        'success' => TRUE,
+        'success' => FALSE,
+        'error_message' => 'Unexpected API response format',
         'prompt' => $context,
-        'response' => $ai_response,
       ]);
-
-      return $ai_response;
+      
+      $this->logError('Unexpected API response format: @response', ['@response' => print_r($result, TRUE)]);
+      throw new \Exception('Unexpected API response format');
       
     } catch (\Exception $e) {
       // Track failure - exception
@@ -308,9 +263,6 @@ class AIApiService {
         'context_data' => [
           'conversation_id' => $conversation->id(),
           'conversation_title' => $conversation->getTitle(),
-          'provider' => $effective_provider ?? 'unknown',
-          'requested_max_tokens' => $requested_max_tokens ?? NULL,
-          'max_tokens' => $max_tokens ?? NULL,
         ],
         'success' => FALSE,
         'error_message' => $e->getMessage(),
@@ -478,7 +430,7 @@ class AIApiService {
    *   Array with keys:
    *   - module: Module making the call (e.g., 'ai_conversation', 'job_hunter')
    *   - operation: Operation type (e.g., 'chat_message', 'resume_parsing')
-   *   - model_id: Runtime model identifier
+   *   - model_id: AWS Bedrock model identifier
    *   - input_tokens: Estimated input tokens
    *   - output_tokens: Estimated output tokens
    *   - stop_reason: API stop reason (end_turn, max_tokens, etc.)
@@ -491,6 +443,8 @@ class AIApiService {
    */
   public function trackApiUsage(array $params) {
     try {
+      $connection = \Drupal::database();
+      
       // Calculate estimated cost based on model-specific pricing
       $model_id = $params['model_id'] ?? '';
       $pricing = $this->getModelPricing($model_id);
@@ -499,9 +453,6 @@ class AIApiService {
         // Dynamic pricing based on actual model
         $input_cost = ($params['input_tokens'] ?? 0) * $pricing['input'] / 1000000;
         $output_cost = ($params['output_tokens'] ?? 0) * $pricing['output'] / 1000000;
-      } elseif (strpos($model_id, 'local/') === 0) {
-        $input_cost = 0.0;
-        $output_cost = 0.0;
       } else {
         // Fallback to Claude 3.5 Sonnet pricing if model unknown
         $input_cost = ($params['input_tokens'] ?? 0) * 3.00 / 1000000;
@@ -534,21 +485,23 @@ class AIApiService {
         'context_data' => isset($params['context_data']) ? json_encode($params['context_data']) : NULL,
       ];
       
-      // Add debugging fields if they exist (schema guard via storage service).
-      if ($this->storage->usageTableHasField('success')) {
+      // Add debugging fields if they exist
+      if ($connection->schema()->fieldExists('ai_conversation_api_usage', 'success')) {
         $fields['success'] = $success ? 1 : 0;
       }
-      if ($this->storage->usageTableHasField('error_message')) {
+      if ($connection->schema()->fieldExists('ai_conversation_api_usage', 'error_message')) {
         $fields['error_message'] = $params['error_message'] ?? NULL;
       }
-      if ($this->storage->usageTableHasField('prompt_preview')) {
-        $fields['prompt_preview'] = mb_substr((string) $full_prompt, 0, 250);
+      if ($connection->schema()->fieldExists('ai_conversation_api_usage', 'prompt_preview')) {
+        $fields['prompt_preview'] = mb_substr((string) $full_prompt, 0, 490);
       }
-      if ($this->storage->usageTableHasField('response_preview')) {
-        $fields['response_preview'] = mb_substr((string) $full_response, 0, 250);
+      if ($connection->schema()->fieldExists('ai_conversation_api_usage', 'response_preview')) {
+        $fields['response_preview'] = mb_substr((string) $full_response, 0, 490);
       }
       
-      $this->storage->insertUsageRecord($fields);
+      $connection->insert('ai_conversation_api_usage')
+        ->fields($fields)
+        ->execute();
         
       if ($success) {
         $this->logInfo('📊 API usage tracked: @module/@operation - @input_tokens in + @output_tokens out = $@cost', [
@@ -586,11 +539,10 @@ class AIApiService {
    *   Additional context for tracking (e.g., ['job_id' => 123, 'uid' => 1]).
    * @param array $options
    *   Optional parameters:
-       *   - model_id: Override default model
-       *   - provider: Override provider ('deepseek'|'ollama')
-       *   - max_tokens: Override default max_tokens (default: 8000)
-       *   - system_prompt: Optional system prompt
-       *   - skip_cache: Set to TRUE to bypass cache lookup (default: FALSE)
+   *   - model_id: Override default model
+   *   - max_tokens: Override default max_tokens (default: 8000)
+   *   - system_prompt: Optional system prompt
+   *   - skip_cache: Set to TRUE to bypass cache lookup (default: FALSE)
    * 
    * @return array
    *   Response array with keys:
@@ -625,82 +577,103 @@ class AIApiService {
         }
       }
       
-      // No cache hit - proceed with the configured provider, falling back to
-      // the local model if DeepSeek is unavailable.
-      $uid = (int) \Drupal::currentUser()->id();
-      $resolved = $this->resolveProvider($uid);
-      $provider = (string) ($options['provider'] ?? $resolved['provider'] ?? 'deepseek');
-      $preferred_model = (string) ($options['model_id'] ?? $resolved['model'] ?? '');
-      $requested_max_tokens = (int) ($options['max_tokens'] ?? 8000);
-      $max_tokens = $this->applyProviderTokenCap($provider, $requested_max_tokens);
+      // No cache hit - proceed with API call
+      $bedrock = $this->buildBedrockClient();
+      $model_id = $options['model_id'] ?? $this->getModelFallbacks()[0];
+      $max_tokens = $options['max_tokens'] ?? 8000;
       
-      $this->logInfo('📤 Sending to configured model provider: provider=@provider, requested_max_tokens=@requested_max_tokens, initial_max_tokens=@max_tokens, model=@model, prompt_chars=@prompt_chars', [
-        '@provider' => $provider,
-        '@requested_max_tokens' => $requested_max_tokens,
-        '@max_tokens' => $max_tokens,
-        '@model' => $preferred_model !== '' ? $preferred_model : 'auto',
-        '@prompt_chars' => strlen($prompt),
-      ]);
+      $request_body = [
+        'anthropic_version' => 'bedrock-2023-05-31',
+        'max_tokens' => $max_tokens,
+        'messages' => [
+          [
+            'role' => 'user',
+            'content' => $prompt,
+          ],
+        ],
+      ];
+
+      if (!empty($options['system_prompt'])) {
+        $request_body['system'] = $options['system_prompt'];
+      }
 
       $start_time = microtime(TRUE);
-      $result = $this->invokeConfiguredChatProvider(
-        $provider,
-        $preferred_model !== '' ? $preferred_model : NULL,
-        [['role' => 'user', 'content' => $prompt]],
-        (string) ($options['system_prompt'] ?? ''),
-        $requested_max_tokens
-      );
-      $duration_ms = (int)((microtime(TRUE) - $start_time) * 1000);
-      $max_tokens = (int) ($result['max_tokens'] ?? $max_tokens);
-      $this->logInfo('📥 Provider response: provider=@provider, output_tokens_estimated=@output, duration_ms=@duration', [
-        '@provider' => $result['provider'],
-        '@output' => $this->estimateTokens($result['text']),
-        '@duration' => $duration_ms,
+
+      $response = $bedrock->invokeModel([
+        'modelId' => $model_id,
+        'body' => json_encode($request_body),
       ]);
 
-      $ai_response = $result['text'];
-      $stop_reason = 'stop';
-      $input_tokens = $this->estimateTokens($prompt);
-      $output_tokens = $this->estimateTokens($ai_response);
-      $context_data_with_config = $context_data + ['requested_max_tokens' => $requested_max_tokens, 'max_tokens' => $max_tokens, 'model_id' => $result['model'], 'provider' => $result['provider']];
+      $duration_ms = (int)((microtime(TRUE) - $start_time) * 1000);
+      $result = json_decode($response['body']->getContents(), TRUE);
+      
+      if (isset($result['content'][0]['text'])) {
+        $ai_response = $result['content'][0]['text'];
+        $stop_reason = $result['stop_reason'] ?? 'unknown';
+        
+        // Estimate tokens
+        $input_tokens = $this->estimateTokens($prompt);
+        $output_tokens = $this->estimateTokens($ai_response);
+        
+        // Add max_tokens to context_data for debugging
+        $context_data_with_config = $context_data + ['max_tokens' => $max_tokens, 'model_id' => $model_id];
+        
+        // Track usage (success case)
+        $this->trackApiUsage([
+          'module' => $module,
+          'operation' => $operation,
+          'model_id' => $model_id,
+          'input_tokens' => $input_tokens,
+          'output_tokens' => $output_tokens,
+          'stop_reason' => $stop_reason,
+          'duration_ms' => $duration_ms,
+          'context_data' => $context_data_with_config,
+          'success' => TRUE,
+          'prompt' => $prompt,
+          'response' => $ai_response,
+        ]);
+        
+        return [
+          'success' => TRUE,
+          'response' => $ai_response,
+          'stop_reason' => $stop_reason,
+          'input_tokens' => $input_tokens,
+          'output_tokens' => $output_tokens,
+          'cached' => FALSE,
+        ];
+      }
+      
+      // Track failure - unexpected response format
+      $context_data_with_config = $context_data + ['max_tokens' => $max_tokens, 'model_id' => $model_id];
       $this->trackApiUsage([
         'module' => $module,
         'operation' => $operation,
-        'model_id' => ($result['provider'] === 'deepseek' ? 'deepseek/' : 'local/') . $result['model'],
-        'input_tokens' => $input_tokens,
-        'output_tokens' => $output_tokens,
-        'stop_reason' => $stop_reason,
-        'duration_ms' => $duration_ms,
+        'model_id' => $model_id,
+        'input_tokens' => 0,
+        'output_tokens' => 0,
+        'stop_reason' => 'error',
+        'duration_ms' => $duration_ms ?? 0,
         'context_data' => $context_data_with_config,
-        'success' => TRUE,
+        'success' => FALSE,
+        'error_message' => 'Unexpected API response format',
         'prompt' => $prompt,
-        'response' => $ai_response,
       ]);
-
+      
       return [
-        'success' => TRUE,
-        'response' => $ai_response,
-        'stop_reason' => $stop_reason,
-        'input_tokens' => $input_tokens,
-        'output_tokens' => $output_tokens,
-        'cached' => FALSE,
+        'success' => FALSE,
+        'error' => 'Unexpected API response format',
       ];
       
     } catch (\Exception $e) {
-      $this->logError('Configured model invocation failed: @message', ['@message' => $e->getMessage()]);
+      $this->logError('AWS Bedrock invocation failed: @message', ['@message' => $e->getMessage()]);
       
       // Track failure - exception
-      $requested_max_tokens_for_error = (int) ($options['max_tokens'] ?? 8000);
-      $uid = (int) \Drupal::currentUser()->id();
-      $resolved = $this->resolveProvider($uid);
-      $provider = (string) ($options['provider'] ?? $resolved['provider'] ?? 'deepseek');
-      $max_tokens_for_error = $this->applyProviderTokenCap($provider, $requested_max_tokens_for_error);
-      $model_id = (string) ($options['model_id'] ?? $resolved['model'] ?? ($provider === 'deepseek' ? $this->getDeepSeekModelName() : $this->getLocalModelName()));
-      $context_data_with_config = $context_data + ['requested_max_tokens' => $requested_max_tokens_for_error, 'max_tokens' => $max_tokens_for_error, 'model_id' => $model_id, 'provider' => $provider];
+      $max_tokens_for_error = $options['max_tokens'] ?? 8000;
+      $context_data_with_config = $context_data + ['max_tokens' => $max_tokens_for_error, 'model_id' => $options['model_id'] ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0'];
       $this->trackApiUsage([
         'module' => $module,
         'operation' => $operation,
-        'model_id' => ($provider === 'deepseek' ? 'deepseek/' : 'local/') . $model_id,
+        'model_id' => $options['model_id'] ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
         'input_tokens' => 0,
         'output_tokens' => 0,
         'stop_reason' => 'error',
@@ -733,48 +706,36 @@ class AIApiService {
    *   Array with response data if found, NULL otherwise.
    */
   private function getCachedApiResponse(string $module, string $operation, array $context_data) {
-    return $this->storage->findCachedResponse($module, $operation, $context_data);
-  }
-
-  /**
-   * Invoke the configured provider, falling back from DeepSeek to local LLM.
-   *
-   * @return array
-   *   ['text' => string, 'model' => string, 'provider' => string, 'max_tokens' => int]
-   */
-  private function invokeConfiguredChatProvider(string $provider, ?string $preferred_model, array $messages, string $system_prompt, int $max_tokens): array {
-    if ($provider === 'deepseek') {
-      try {
-        $deepseek = $this->deepseekService ?? \Drupal::service('ai_conversation.deepseek_api_service');
-        $model = $this->getDeepSeekModelName($preferred_model);
-        $deepseek_max_tokens = $this->applyProviderTokenCap('deepseek', $max_tokens);
-        $result = $deepseek->chat($model, $messages, $system_prompt, 60, $deepseek_max_tokens);
-        return [
-          'text' => $result['text'],
-          'model' => $result['model'],
-          'provider' => 'deepseek',
-          'max_tokens' => $deepseek_max_tokens,
-        ];
-      }
-      catch (\Exception $e) {
-        $ollama_max_tokens = $this->applyProviderTokenCap('ollama', $max_tokens);
-        $this->logWarning('DeepSeek provider failed, falling back to local LLM with max_tokens=@max_tokens: @message', [
-          '@message' => $e->getMessage(),
-          '@max_tokens' => $ollama_max_tokens,
-        ]);
-      }
+    $connection = \Drupal::database();
+    
+    // Build WHERE clauses for context_data matching
+    $query = $connection->select('ai_conversation_api_usage', 'u')
+      ->fields('u', ['response_preview', 'stop_reason', 'timestamp', 'input_tokens', 'output_tokens'])
+      ->condition('module', $module)
+      ->condition('operation', $operation)
+      ->condition('success', 1)
+      ->orderBy('timestamp', 'DESC')
+      ->range(0, 1);
+    
+    // Add JSON_EXTRACT conditions for each context field
+    // JSON_EXTRACT handles both numeric and string values correctly
+    foreach ($context_data as $key => $value) {
+      $query->where("JSON_EXTRACT(context_data, '$.$key') = :value_$key", [":value_$key" => $value]);
     }
-
-    $ollama = $this->ollamaService ?? \Drupal::service('ai_conversation.ollama_api_service');
-    $model = $this->getLocalModelName($provider === 'ollama' ? $preferred_model : NULL);
-    $ollama_max_tokens = $this->applyProviderTokenCap('ollama', $max_tokens);
-    $result = $ollama->chat($model, $messages, $system_prompt, 60, $ollama_max_tokens);
-    return [
-      'text' => $result['text'],
-      'model' => $result['model'],
-      'provider' => 'ollama',
-      'max_tokens' => $ollama_max_tokens,
-    ];
+    
+    $result = $query->execute()->fetchAssoc();
+    
+    if ($result && !empty($result['response_preview'])) {
+      return [
+        'response' => $result['response_preview'],
+        'stop_reason' => $result['stop_reason'],
+        'timestamp' => $result['timestamp'],
+        'input_tokens' => $result['input_tokens'],
+        'output_tokens' => $result['output_tokens'],
+      ];
+    }
+    
+    return NULL;
   }
 
   /**
@@ -794,8 +755,21 @@ class AIApiService {
    *   Number of cached responses cleared.
    */
   public function clearCachedResponse(string $module, string $operation, array $context_data) {
-    $count = $this->storage->deleteCachedResponses($module, $operation, $context_data);
-
+    $connection = \Drupal::database();
+    
+    // Build delete query matching the context
+    $query = $connection->delete('ai_conversation_api_usage')
+      ->condition('module', $module)
+      ->condition('operation', $operation);
+    
+    // Add JSON_EXTRACT conditions for each context field
+    // JSON_EXTRACT handles both numeric and string values correctly
+    foreach ($context_data as $key => $value) {
+      $query->where("JSON_EXTRACT(context_data, '$.$key') = :value_$key", [":value_$key" => $value]);
+    }
+    
+    $count = $query->execute();
+    
     if ($count > 0) {
       $this->logInfo('🗑️ Cleared @count cached GenAI response(s) for @module/@operation', [
         '@count' => $count,
@@ -803,101 +777,50 @@ class AIApiService {
         '@operation' => $operation,
       ]);
     }
-
+    
     return $count;
   }
 
   /**
-   * Build the structured system prompt for a conversation.
-   */
-  private function buildSystemPrompt(NodeInterface $conversation): string {
-    $sections = [];
-    $base_prompt = trim((string) $this->promptManager->getSystemPrompt(10));
-    if ($base_prompt !== '') {
-      $sections[] = $base_prompt;
-    }
-
-    if ($conversation->hasField('field_context') && !$conversation->get('field_context')->isEmpty()) {
-      $conversation_context = trim((string) $conversation->get('field_context')->value);
-      if ($conversation_context !== '') {
-        $sections[] = "CONVERSATION CONTEXT:\n" . $this->promptManager->normalizePromptText($conversation_context);
-      }
-    }
-
-    if ($conversation->hasField('field_conversation_summary') && !$conversation->get('field_conversation_summary')->isEmpty()) {
-      $summary = trim((string) $conversation->get('field_conversation_summary')->value);
-      if ($summary !== '') {
-        $sections[] = "CONVERSATION SUMMARY:\n" . $summary;
-      }
-    }
-
-    return implode("\n\n", $sections);
-  }
-
-  /**
-   * Build chat messages using stored history without duplicating the latest input.
-   */
-  private function buildChatMessages(NodeInterface $conversation, string $new_message): array {
-    $messages = $this->getRecentMessages($conversation);
-    $new_message = trim($new_message);
-
-    if ($new_message !== '' && !$this->hasTrailingCurrentUserMessage($messages, $new_message)) {
-      $messages[] = [
-        'role' => 'user',
-        'content' => $new_message,
-      ];
-    }
-
-    return array_map(function (array $message): array {
-      $role = in_array($message['role'], ['user', 'assistant', 'system'], TRUE) ? $message['role'] : 'user';
-      return [
-        'role' => $role,
-        'content' => (string) $message['content'],
-      ];
-    }, $messages);
-  }
-
-  /**
-   * Returns TRUE when the last stored message is the same user prompt.
-   */
-  private function hasTrailingCurrentUserMessage(array $messages, string $new_message): bool {
-    if (empty($messages)) {
-      return FALSE;
-    }
-
-    $last_message = end($messages);
-    return !empty($last_message['role'])
-      && $last_message['role'] === 'user'
-      && isset($last_message['content'])
-      && trim((string) $last_message['content']) === $new_message;
-  }
-
-  /**
-   * Build a text preview of the full prompt for token estimation/debugging.
-   */
-  private function buildPromptPreview(string $system_prompt, array $messages): string {
-    $parts = [];
-
-    if ($system_prompt !== '') {
-      $parts[] = "SYSTEM:\n" . $system_prompt;
-    }
-
-    foreach ($messages as $message) {
-      $role = strtoupper((string) $message['role']);
-      $parts[] = $role . ":\n" . (string) $message['content'];
-    }
-
-    return implode("\n\n", $parts);
-  }
-
-  /**
-   * Build optimized context using the runtime prompt plus recent messages.
+   * Build optimized context using summary + recent messages.
    */
   private function buildOptimizedContext(NodeInterface $conversation, string $new_message) {
-    return $this->buildPromptPreview(
-      $this->buildSystemPrompt($conversation),
-      $this->buildChatMessages($conversation, $new_message)
-    );
+    // Check if this is the start of a conversation (no previous messages).
+    $recent_messages = $this->getRecentMessages($conversation);
+    $is_conversation_start = empty($recent_messages) && 
+      (!$conversation->hasField('field_conversation_summary') || $conversation->get('field_conversation_summary')->isEmpty());
+    
+    // For new conversations, use enhanced context with Forseti mission info.
+    if ($is_conversation_start) {
+      $context = $this->promptManager->getBaseSystemPrompt();
+    } else {
+      // For existing conversations, use the original system prompt.
+      $system_prompt = $conversation->get('field_context')->value ?: $this->promptManager->getBaseSystemPrompt();
+      $context = $system_prompt . "\n\n";
+    }
+
+    // Add conversation summary if it exists.
+    if ($conversation->hasField('field_conversation_summary') && !$conversation->get('field_conversation_summary')->isEmpty()) {
+      $summary = $conversation->get('field_conversation_summary')->value;
+      if (!empty($summary)) {
+        $context .= "CONVERSATION SUMMARY (Previous Discussion):\n" . $summary . "\n\n";
+      }
+    }
+
+    // Add recent messages.
+    if (!empty($recent_messages)) {
+      $context .= "RECENT CONVERSATION:\n";
+      
+      foreach ($recent_messages as $msg) {
+        $role = $msg['role'] === 'user' ? 'Human' : 'Assistant';
+        $context .= $role . ": " . $msg['content'] . "\n\n";
+      }
+    }
+
+    // Add current message.
+    $context .= "Human: " . $new_message . "\n\n";
+
+    return $context;
   }
 
 
@@ -974,7 +897,7 @@ class AIApiService {
       // Build context for summary generation.
       $summary_context = $this->buildSummaryContext($conversation, $messages_to_summarize);
 
-      // Generate summary using the local model.
+      // Generate summary using Claude.
       $summary = $this->generateSummary($summary_context);
 
       // Update the conversation with the new summary.
@@ -1003,21 +926,37 @@ class AIApiService {
    */
   private function generateSummary(string $context) {
     try {
-      $ollama = $this->ollamaService ?? \Drupal::service('ai_conversation.ollama_api_service');
-      $result = $ollama->chat(
-        $this->getLocalModelName(),
-        [['role' => 'user', 'content' => $context]],
-        '',
-        60,
-        20000
-      );
-
-      return $result['text'];
-      
-    } catch (\Exception $e) {
-      $this->logError('Error generating summary: @message', [
-        '@message' => $e->getMessage(),
+      $bedrock = $this->buildBedrockClient();
+      $models_to_try = $this->getModelFallbacks();
+      $request_body = json_encode([
+        'anthropic_version' => 'bedrock-2023-05-31',
+        'max_tokens' => 20000,
+        'messages' => [['role' => 'user', 'content' => $context]],
       ]);
+
+      $last_exception = NULL;
+      $result = NULL;
+      foreach ($models_to_try as $candidate_model) {
+        try {
+          $response = $bedrock->invokeModel(['modelId' => $candidate_model, 'body' => $request_body]);
+          $result = json_decode($response['body']->getContents(), true);
+          $last_exception = NULL;
+          break;
+        } catch (\Aws\Exception\AwsException $e) {
+          $last_exception = $e;
+        }
+      }
+      if ($last_exception !== NULL) {
+        throw $last_exception;
+      }
+
+      if (isset($result['content'][0]['text'])) {
+        return $result['content'][0]['text'];
+      }
+      throw new \Exception('Unexpected API response format');
+
+    } catch (\Exception $e) {
+      $this->logError('Error generating summary: @message', ['@message' => $e->getMessage()]);
       return 'Summary generation failed.';
     }
   }
@@ -1114,25 +1053,37 @@ class AIApiService {
    * Test API connection.
    */
   public function testConnection() {
-    $ollama = $this->ollamaService ?? \Drupal::service('ai_conversation.ollama_api_service');
-    $result = $ollama->testConnection();
+    try {
+      $bedrock = $this->buildBedrockClient();
+      $models_to_try = $this->getModelFallbacks();
+      $model = $models_to_try[0];
 
-    if ($result['success']) {
-      return [
-        'success' => TRUE,
-        'message' => 'Local LLM connection successful',
-        'model' => $result['models'][0] ?? $this->getLocalModelName(),
-        'details' => !empty($result['models']) ? implode(', ', $result['models']) : '',
-      ];
+      $response = $bedrock->invokeModel([
+        'modelId' => $model,
+        'body' => json_encode([
+          'anthropic_version' => 'bedrock-2023-05-31',
+          'max_tokens' => 256,
+          'messages' => [
+            [
+              'role' => 'user',
+              'content' => 'Hello'
+            ]
+          ]
+        ])
+      ]);
+
+      $result = json_decode($response['body']->getContents(), true);
+      
+      if (isset($result['content'][0]['text'])) {
+        return ['success' => TRUE, 'message' => 'AWS Bedrock connection successful', 'model' => $model];
+      } else {
+        return ['success' => FALSE, 'message' => 'Unexpected API response'];
+      }
+
+    } catch (\Exception $e) {
+      return ['success' => FALSE, 'message' => 'AWS Bedrock connection failed: ' . $e->getMessage()];
     }
-
-    return [
-      'success' => FALSE,
-      'message' => 'Local LLM connection failed',
-      'details' => $result['error'] ?? 'Unable to reach the configured local model server.',
-    ];
   }
-
 
   /**
    * Get conversation statistics.
@@ -1195,7 +1146,7 @@ class AIApiService {
       ]);
       
       $suggestion->save();
-
+      
       $this->logInfo('Created community suggestion: @title (nid: @nid)', [
         '@title' => $title,
         '@nid' => $suggestion->id(),
@@ -1212,99 +1163,54 @@ class AIApiService {
   }
 
   /**
-   * Extracts, executes, and removes suggestion markup from an AI response.
+   * Create a community suggestion from in-game context (no conversation node).
    *
-   * Supports both well-formed blocks with closing tags and malformed blocks
-   * where the model emits only the opening tag and payload.
+   * Used by the dungeoncrawler room chat pipeline where suggestions originate
+   * from the GM reply rather than an ai_conversation node.
    *
-   * @param \Drupal\node\NodeInterface $conversation
-   *   The conversation node where the suggestion was made.
-   * @param string $ai_response
-   *   Raw AI response text.
+   * @param string $summary
+   *   AI-generated summary of the suggestion.
    * @param string $original_message
-   *   The user message that triggered the response.
+   *   The original user message containing the suggestion.
+   * @param string $category
+   *   The suggestion category.
+   * @param array $context
+   *   Optional context: campaign_id, room_id, character_id.
    *
-   * @return array
-   *   Array with:
-   *   - response: Cleaned user-visible response.
-   *   - suggestion_created: TRUE when a suggestion node was created.
+   * @return \Drupal\node\NodeInterface|null
+   *   The created suggestion node or NULL on failure.
    */
-  public function processSuggestionMarkup(NodeInterface $conversation, string $ai_response, string $original_message): array {
-    if (strpos($ai_response, '[CREATE_SUGGESTION]') === FALSE) {
-      return [
-        'response' => trim($ai_response),
-        'suggestion_created' => FALSE,
-      ];
+  public function createBacklogSuggestion(string $summary, string $original_message, string $category, array $context = []) {
+    try {
+      $user = \Drupal::currentUser();
+      $title = mb_strlen($summary) > 100 ? mb_substr($summary, 0, 97) . '...' : $summary;
+
+      $suggestion = Node::create([
+        'type'                     => 'community_suggestion',
+        'title'                    => $title,
+        'uid'                      => $user->id(),
+        'status'                   => TRUE,
+        'field_suggestion_summary' => ['value' => $summary, 'format' => 'plain_text'],
+        'field_original_message'   => ['value' => $original_message, 'format' => 'plain_text'],
+        'field_suggestion_category' => $category,
+        'field_suggestion_status'  => 'new',
+      ]);
+      $suggestion->save();
+
+      $this->logInfo('Backlog suggestion created from game: @title (nid: @nid, campaign: @cid)', [
+        '@title' => $title,
+        '@nid'   => $suggestion->id(),
+        '@cid'   => $context['campaign_id'] ?? 'unknown',
+      ]);
+
+      return $suggestion;
     }
-
-    $default_confirmation = 'Your suggestion has been logged for review. Thank you for the feedback.';
-    $open_tag = '[CREATE_SUGGESTION]';
-    $close_tag = '[/CREATE_SUGGESTION]';
-    $open_pos = strpos($ai_response, $open_tag);
-    $payload_start = $open_pos + strlen($open_tag);
-    $close_pos = strpos($ai_response, $close_tag, $payload_start);
-
-    $before = trim(substr($ai_response, 0, $open_pos));
-    $after = '';
-    if ($close_pos !== FALSE) {
-      $payload = substr($ai_response, $payload_start, $close_pos - $payload_start);
-      $after = trim(substr($ai_response, $close_pos + strlen($close_tag)));
+    catch (\Exception $e) {
+      $this->logError('Failed to create backlog suggestion from game: @message', [
+        '@message' => $e->getMessage(),
+      ]);
+      return NULL;
     }
-    else {
-      $payload = substr($ai_response, $payload_start);
-    }
-
-    $summary = '';
-    $category = 'general_feedback';
-    $original = $original_message;
-
-    if (preg_match('/Summary:\s*(.+?)(?=\nCategory:|$)/s', $payload, $summary_match)) {
-      $summary = trim($summary_match[1]);
-    }
-    if (preg_match('/Category:\s*(\w+)/i', $payload, $category_match)) {
-      $category = strtolower(trim($category_match[1]));
-    }
-    if (preg_match('/Original:\s*(.+?)(?=\n[A-Z][A-Za-z _-]+:|$)/s', $payload, $original_match)) {
-      $original = trim($original_match[1]);
-    }
-
-    $cleaned_parts = array_values(array_filter([$before, $after], static fn($value) => $value !== ''));
-    $cleaned_response = trim(implode("\n\n", $cleaned_parts));
-    $has_transcript_wrapper = preg_match('/(^|\n)\s*(User|Assistant|Human|Forseti):/m', $before) || preg_match('/(^|\n)\s*(User|Assistant|Human|Forseti):/m', $after);
-    $has_explicit_confirmation = $this->hasExplicitSuggestionConfirmation($original_message);
-
-    $suggestion_created = FALSE;
-    if ($summary !== '' && $has_explicit_confirmation && !$has_transcript_wrapper) {
-      $suggestion_created = (bool) $this->createSuggestion($conversation, $summary, $original, $category);
-    }
-
-    if ($suggestion_created && ($cleaned_response === '' || preg_match('/(^|\n)\s*(User|Assistant|Human|Forseti):/m', $cleaned_response))) {
-      $cleaned_response = $default_confirmation;
-    }
-
-    return [
-      'response' => $cleaned_response !== '' ? $cleaned_response : trim($ai_response),
-      'suggestion_created' => $suggestion_created,
-    ];
-  }
-
-  /**
-   * Returns TRUE when the user message explicitly confirms suggestion submission.
-   */
-  private function hasExplicitSuggestionConfirmation(string $message): bool {
-    $normalized = mb_strtolower($message);
-    $normalized = preg_replace('/[^\p{L}\p{N}\s]+/u', ' ', $normalized);
-    $normalized = preg_replace('/\s+/u', ' ', trim($normalized));
-
-    if ($normalized === '') {
-      return FALSE;
-    }
-
-    if (preg_match('/\b(no|not|dont|don t|do not|cancel|stop|wait)\b/u', $normalized)) {
-      return FALSE;
-    }
-
-    return (bool) preg_match('/^(yes|yep|yeah|sure|ok|okay|correct|confirmed|submit|submit it|please submit|please submit it|please do|go ahead|sounds good|that s correct|that is correct|that s right|that is right|yes submit it|yes please submit it)$/u', $normalized);
   }
 
 }

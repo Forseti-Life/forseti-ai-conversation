@@ -5,7 +5,7 @@
 ## **Module Overview**
 
 ### **Purpose**
-The ai_conversation module serves as the foundational AI service provider for the entire forseti.com platform. It provides centralized AWS Bedrock integration with Claude 3.5 Sonnet AI model for all AI-powered functionality across the application.
+The ai_conversation module serves as the foundational AI service provider for the Dungeoncrawler platform. It provides centralized AWS Bedrock integration with Claude 3.5 Sonnet AI model for all AI-powered functionality across the application.
 
 ### **Core Responsibility**
 - **Primary:** Centralized AWS Bedrock API integration and management
@@ -389,4 +389,4 @@ AWS_DEFAULT_REGION=us-west-2
 - **[TODO]** Cost optimization recommendations
 - **[TODO]** Security best practices guide
 
-This architecture serves as the foundation for all AI functionality on the forseti.com platform and must be properly implemented before dependent modules can leverage AI capabilities effectively.
+This architecture serves as the foundation for all AI functionality on the Dungeoncrawler platform and must be properly implemented before dependent modules can leverage AI capabilities effectively.

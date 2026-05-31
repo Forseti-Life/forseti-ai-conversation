@@ -17,9 +17,16 @@ trait ConfigurableLoggingTrait {
    *   The logging level.
    */
   protected function getLogLevel(): int {
-    $config = \Drupal::config('ai_conversation.settings');
-
-    return $config->get('debug_logging') ? 4 : 1;
+    $config = \Drupal::config('thetruthperspective.logging');
+    
+    // Check for module-specific override first
+    $module_level = $config->get('modules.ai_conversation.level');
+    if ($module_level !== NULL) {
+      return (int) $module_level;
+    }
+    
+    // Fall back to global level (default to ERROR only)
+    return (int) $config->get('global.level') ?? 1;
   }
 
   /**

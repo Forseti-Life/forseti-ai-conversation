@@ -5,12 +5,7 @@ namespace Drupal\ai_conversation\Form;
 use Drupal\Core\Form\ConfigFormBase;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\ai_conversation\Service\AIApiServiceInterface;
-use Drupal\ai_conversation\Service\DeepSeekApiService;
-use Drupal\ai_conversation\Service\OllamaApiService;
-use Drupal\Core\Ajax\AjaxResponse;
-use Drupal\Core\Ajax\HtmlCommand;
 use Symfony\Component\DependencyInjection\ContainerInterface;
-use Psr\Log\LoggerInterface;
 
 /**
  * Configure AI Conversation settings.
@@ -56,19 +51,11 @@ class AIConversationSettingsForm extends ConfigFormBase {
   protected $aiApiService;
 
   /**
-   * The logger.
-   *
-   * @var \Psr\Log\LoggerInterface
-   */
-  protected $logger;
-
-  /**
    * {@inheritdoc}
    */
   public static function create(ContainerInterface $container): self {
     $instance = parent::create($container);
     $instance->aiApiService = $container->get('ai_conversation.ai_api_service');
-    $instance->logger = $container->get('logger.channel.ai_conversation');
     return $instance;
   }
 
@@ -92,18 +79,8 @@ class AIConversationSettingsForm extends ConfigFormBase {
   public function buildForm(array $form, FormStateInterface $form_state): array {
     $config = $this->config('ai_conversation.settings');
 
-    // Version debug display
-    $form['version_debug'] = [
-      '#type' => 'markup',
-      '#markup' => '<div style="background: #fff3cd; border: 2px solid #ff9800; padding: 12px; border-radius: 4px; margin-bottom: 20px; font-weight: bold; color: #ff6f00;">⚙️ FORM VERSION: 2025-02-27-v5 (Debug: Changes should appear here)</div>',
-      '#weight' => -100,
-    ];
-
     // Credential status
     $form['credential_status'] = $this->buildCredentialStatus($config);
-
-    // Connection test result status
-    $form['test_result_status'] = $this->buildTestResultStatus();
 
     // AWS Bedrock settings
     $form['aws_settings'] = $this->buildAwsSettings($config);
@@ -133,22 +110,29 @@ class AIConversationSettingsForm extends ConfigFormBase {
    *   Form element array.
    */
   protected function buildCredentialStatus($config): array {
-    $provider_config = \Drupal::config('ai_conversation.provider_settings');
-    $deepseek_service = \Drupal::service('ai_conversation.deepseek_api_service');
-    $ollama_service = \Drupal::service('ai_conversation.ollama_api_service');
     $status_items = [];
-    $default_provider = (string) ($provider_config->get('default_provider') ?: 'deepseek');
 
-    $status_items[] = ['#markup' => $this->t('Primary provider: @provider', ['@provider' => strtoupper($default_provider)])];
-    $status_items[] = ['#markup' => $this->t('DeepSeek endpoint: @url', ['@url' => $deepseek_service->getBaseUrl()])];
-    $status_items[] = ['#markup' => $this->t('DeepSeek default model: @model', [
-      '@model' => (string) ($provider_config->get('deepseek_default_model') ?: DeepSeekApiService::DEFAULT_MODEL),
-    ])];
-    $status_items[] = ['#markup' => $this->t('Local fallback endpoint: @url', ['@url' => $ollama_service->getBaseUrl()])];
-    $status_items[] = ['#markup' => $this->t('Local fallback models: @models', [
-      '@models' => implode(', ', (array) ($provider_config->get('ollama_available_models') ?: [OllamaApiService::DEFAULT_MODEL])),
-    ])];
-    $status_items[] = ['#markup' => $this->t('DeepSeek falls back to the local LLM automatically when unavailable.')];
+    // Check AWS credentials
+    if (!empty($config->get('aws_access_key_id'))) {
+      $status_items[] = ['#markup' => $this->t('Using configured AWS credentials')];
+    }
+    elseif (getenv('AWS_ACCESS_KEY_ID')) {
+      $status_items[] = ['#markup' => $this->t('Using AWS_ACCESS_KEY_ID environment variable')];
+    }
+    else {
+      $status_items[] = ['#markup' => $this->t('No AWS credentials found')];
+    }
+
+    // Check AWS region
+    if ($region = $config->get('aws_region')) {
+      $status_items[] = ['#markup' => $this->t('Region from configuration: @region', ['@region' => $region])];
+    }
+    elseif ($env_region = getenv('AWS_DEFAULT_REGION')) {
+      $status_items[] = ['#markup' => $this->t('Region from AWS_DEFAULT_REGION: @region', ['@region' => $env_region])];
+    }
+    else {
+      $status_items[] = ['#markup' => $this->t('Using default region: @region', ['@region' => self::DEFAULT_REGION])];
+    }
 
     return [
       '#type' => 'item',
@@ -161,29 +145,7 @@ class AIConversationSettingsForm extends ConfigFormBase {
   }
 
   /**
-   * Build test result status display.
-   *
-   * @return array
-   *   Form element array.
-   */
-  protected function buildTestResultStatus(): array {
-    $last_status = \Drupal::state()->get('ai_conversation.last_connection_test_status', 'Connection: NOT TESTED');
-    $last_details = \Drupal::state()->get('ai_conversation.last_connection_test_details', '');
-
-    $markup = '<div id="aws-test-result-status">' . htmlspecialchars($last_status) . '</div>';
-    if (!empty($last_details)) {
-      $markup .= '<div style="margin-top:8px;" id="aws-test-result-details">' . htmlspecialchars($last_details) . '</div>';
-    }
-
-    return [
-      '#type' => 'markup',
-      '#markup' => $markup,
-      '#weight' => -50,
-    ];
-  }
-
-  /**
-   * Build model settings fieldset.
+   * Build AWS Bedrock settings fieldset.
    *
    * @param \Drupal\Core\Config\ImmutableConfig $config
    *   The configuration object.
@@ -194,19 +156,57 @@ class AIConversationSettingsForm extends ConfigFormBase {
   protected function buildAwsSettings($config): array {
     $fieldset = [
       '#type' => 'fieldset',
-      '#title' => $this->t('Model Settings'),
-      '#description' => $this->t('Conversation traffic uses the local LLM configured on the <a href="@provider_url">AI Provider Settings</a> page. This form now manages shared prompt and token settings only. <br><strong>Monitor usage:</strong> <a href="@debug_url">GenAI Debug Inspector</a> | <a href="@usage_url">Usage Dashboard</a>', [
-        '@provider_url' => '/admin/config/forseti/ai-provider',
+      '#title' => $this->t('AWS Bedrock Settings'),
+      '#description' => $this->t('Configure your AWS credentials to connect to Bedrock AI services. Leave fields empty to use environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION). <br><strong>Monitor usage:</strong> <a href="@debug_url">GenAI Debug Inspector</a> | <a href="@usage_url">Usage Dashboard</a> | <a href="@pricing_url">Model Pricing</a>', [
         '@debug_url' => '/admin/reports/genai-debug',
         '@usage_url' => '/admin/reports/genai-usage',
+        '@pricing_url' => '/admin/reports/genai-pricing',
       ]),
+    ];
+
+    $fieldset['aws_access_key_id'] = [
+      '#type' => 'textfield',
+      '#title' => $this->t('AWS Access Key ID'),
+      '#default_value' => $config->get('aws_access_key_id'),
+      '#description' => $this->t('Your AWS Access Key ID with permissions to use Bedrock. Leave empty to use AWS_ACCESS_KEY_ID environment variable.'),
+      '#required' => FALSE,
+    ];
+
+    $fieldset['aws_secret_access_key'] = [
+      '#type' => 'password',
+      '#title' => $this->t('AWS Secret Access Key'),
+      '#default_value' => $config->get('aws_secret_access_key'),
+      '#description' => $this->t('Your AWS Secret Access Key. Leave blank to keep current value or use AWS_SECRET_ACCESS_KEY environment variable.'),
+      '#attributes' => ['autocomplete' => 'off'],
+      '#required' => FALSE,
+    ];
+
+    $fieldset['aws_region'] = [
+      '#type' => 'select',
+      '#title' => $this->t('AWS Region'),
+      '#default_value' => $config->get('aws_region') ?: self::DEFAULT_REGION,
+      '#options' => $this->getAwsRegionOptions(),
+      '#description' => $this->t('The AWS region where Bedrock is available.'),
+      '#required' => TRUE,
+    ];
+
+    $fieldset['aws_model'] = [
+      '#type' => 'select',
+      '#title' => $this->t('AI Model'),
+      '#default_value' => $config->get('aws_model') ?: self::DEFAULT_MODEL,
+      '#options' => $this->getModelOptions(),
+      '#description' => $this->t('Select the AI model for conversations. Pricing shown as <strong>Input/Output per 1M tokens</strong>. <br><strong>Example:</strong> A 10K input + 5K output request with Sonnet 4.5 costs: (10K × $3 / 1M) + (5K × $15 / 1M) = $0.03 + $0.075 = <strong>$0.105</strong><br><strong>Recommendation:</strong> Sonnet 4.5 offers the best balance for most tasks. Use Haiku 4.5 for high-volume/simple tasks, Opus 4.6 for complex reasoning.<br><a href="@pricing_url" target="_blank">View detailed pricing comparison →</a> | <a href="@debug_url" target="_blank">Monitor actual usage →</a>', [
+        '@pricing_url' => '/admin/reports/genai-pricing',
+        '@debug_url' => '/admin/reports/genai-debug',
+      ]),
+      '#required' => TRUE,
     ];
 
     $fieldset['system_prompt'] = [
       '#type' => 'textarea',
       '#title' => $this->t('System Prompt'),
       '#default_value' => $config->get('system_prompt'),
-      '#description' => $this->t('The system prompt that defines the AI assistant\'s role, personality, and knowledge context.'),
+      '#description' => $this->t('The system prompt that defines Forseti\'s Game Master role, voice, and world context.'),
       '#rows' => self::DEFAULT_SYSTEM_PROMPT_ROWS,
       '#required' => FALSE,
     ];
@@ -352,43 +352,20 @@ class AIConversationSettingsForm extends ConfigFormBase {
     return [
       '#type' => 'details',
       '#title' => $this->t('Connection Test'),
-      '#open' => TRUE,
-      '#attributes' => ['class' => ['ai-connection-test']],
-      'instructions' => [
-        '#type' => 'markup',
-        '#markup' => '<p style="margin-bottom: 15px;"><strong>Click the button below to verify your local LLM connection.</strong> You will see a clear <strong style="color: green;">✅ PASS</strong> or <strong style="color: red;">❌ FAIL</strong> message.</p>',
-      ],
+      '#open' => FALSE,
       'test_connection' => [
-        '#type' => 'submit',
-        '#name' => 'test_connection_btn',
-        '#value' => $this->t('🔌 Test Local LLM Connection'),
-        '#submit' => ['::testConnectionSubmit'],
-        '#validate' => [],
-        '#limit_validation_errors' => [],
+        '#type' => 'button',
+        '#value' => $this->t('Test AWS Bedrock Connection'),
         '#ajax' => [
-          'callback' => '::testConnectionAjax',
-          'event' => 'click',
+          'callback' => '::testConnection',
           'wrapper' => 'connection-test-result',
-          'method' => 'html',
+          'method' => 'replace',
           'effect' => 'fade',
-          'progress' => [
-            'type' => 'throbber',
-            'message' => $this->t('🔄 Testing connection... (this may take up to 15 seconds)'),
-          ],
-        ],
-        '#attributes' => [
-          'class' => ['button', 'button--primary', 'test-connection-btn'],
-          'id' => 'test-connection-btn',
-          'style' => 'padding: 12px 24px; font-size: 16px;',
         ],
       ],
-      'connection_status' => [
+      'connection_result' => [
         '#type' => 'markup',
-        '#markup' => '<div id="connection-test-result" style="margin-top: 20px; min-height: 60px; padding: 15px; border-radius: 4px; border: 2px solid #ddd; background-color: #f9f9f9;" class="connection-test-status"></div>',
-      ],
-      'test_note' => [
-        '#type' => 'markup',
-        '#markup' => '<p style="margin-top: 15px; font-size: 12px; color: #666;"><strong>Note:</strong> The first test may take a few seconds while the local model warms up.</p>',
+        '#markup' => '<div id="connection-test-result"></div>',
       ],
     ];
   }
@@ -527,105 +504,46 @@ class AIConversationSettingsForm extends ConfigFormBase {
   }
 
   /**
-   * AJAX callback for testing local LLM connection.
+   * Test the AWS Bedrock connection.
    *
    * @param array $form
    *   The form array.
    * @param \Drupal\Core\Form\FormStateInterface $form_state
    *   The form state.
    *
-   * @return \Drupal\Core\Ajax\AjaxResponse
-   *   AJAX response with connection test result.
+   * @return array
+   *   Render array for AJAX response.
    */
-  public function testConnectionAjax(array &$form, FormStateInterface $form_state): AjaxResponse {
-    $response = new AjaxResponse();
-    $this->logger->info('Local LLM connection test initiated');
-    
-    try {
-      $result = $form_state->get('connection_test_result');
-      if (!$result) {
-        $this->logger->info('Calling AIApiService::testConnection() from AJAX callback');
-        $result = $this->aiApiService->testConnection();
-      }
-      $this->logger->info('Connection test result: @result', ['@result' => json_encode($result)]);
-
-      if ($result['success']) {
-        $status_html = 'Connection: PASS';
-        $detail_html = 'PASS - ' . htmlspecialchars($result['message']);
-        if (!empty($result['model'])) {
-          $detail_html .= ' (Model: ' . htmlspecialchars($result['model']) . ')';
-        }
-        $this->logger->notice('Local LLM connection test PASSED');
-      } else {
-        $message = (string) ($result['message'] ?? 'Connection failed');
-        $is_timeout = stripos($message, 'timeout') !== FALSE;
-        $status_html = $is_timeout ? 'Connection: FAIL (TIMEOUT)' : 'Connection: FAIL';
-        $detail_html = 'FAIL - ' . htmlspecialchars($message);
-        if (!empty($result['details'])) {
-          $detail_html .= ' Details: ' . htmlspecialchars($result['details']);
-        }
-        $this->logger->error('Local LLM connection test FAILED: @message', ['@message' => $message]);
-      }
-    }
-    catch (\Exception $e) {
-      $error_message = (string) $e->getMessage();
-      $is_timeout = stripos($error_message, 'timeout') !== FALSE;
-      $status_html = $is_timeout ? 'Connection: FAIL (TIMEOUT)' : 'Connection: FAIL';
-      $detail_html = 'FAIL - ' . htmlspecialchars($error_message);
-      $this->logger->error('Local LLM connection test FAILED with exception: @error', ['@error' => $error_message]);
-    }
-
-    \Drupal::state()->set('ai_conversation.last_connection_test_status', $status_html);
-    \Drupal::state()->set('ai_conversation.last_connection_test_details', $detail_html);
-    
-    // Update both the status area at top AND the detailed results below
-    $response->addCommand(new HtmlCommand('#aws-test-result-status', $status_html));
-    $response->addCommand(new HtmlCommand('#connection-test-result', $detail_html));
-    return $response;
-  }
-
-  /**
-   * Submit handler for AJAX connection test button.
-   *
-   * @param array $form
-   *   The form array.
-   * @param \Drupal\Core\Form\FormStateInterface $form_state
-   *   The form state.
-   */
-  public function testConnectionSubmit(array &$form, FormStateInterface $form_state): void {
-    $this->logger->info('Local LLM connection test button clicked from UI (submit handler)');
-
+  public function testConnection(array &$form, FormStateInterface $form_state): array {
     try {
       $result = $this->aiApiService->testConnection();
-      $form_state->set('connection_test_result', $result);
 
-      if (!empty($result['success'])) {
-        $status = 'Connection: PASS';
-        $details = 'PASS - ' . ($result['message'] ?? 'Connection successful');
-      }
-      else {
-        $message = (string) ($result['message'] ?? 'Connection failed');
-        $is_timeout = stripos($message, 'timeout') !== FALSE;
-        $status = $is_timeout ? 'Connection: FAIL (TIMEOUT)' : 'Connection: FAIL';
-        $details = 'FAIL - ' . $message;
-        if (!empty($result['details'])) {
-          $details .= ' Details: ' . $result['details'];
-        }
+      $status = $result['success'] ? 'status' : 'error';
+      $message_text = $result['message'];
+
+      if ($result['success'] && !empty($result['model'])) {
+        $message_text .= ' <strong>Model:</strong> ' . $result['model'];
       }
 
-      \Drupal::state()->set('ai_conversation.last_connection_test_status', $status);
-      \Drupal::state()->set('ai_conversation.last_connection_test_details', $details);
-      $this->logger->info('Connection test submit handler status: @status', ['@status' => $status]);
+      if (!$result['success'] && !empty($result['details'])) {
+        $message_text .= '<br><strong>Details:</strong> ' . $result['details'];
+      }
+
+      $message = [
+        '#type' => 'markup',
+        '#markup' => '<div class="messages messages--' . $status . '">' . $message_text . '</div>',
+      ];
     }
     catch (\Exception $e) {
-      $message = (string) $e->getMessage();
-      $is_timeout = stripos($message, 'timeout') !== FALSE;
-      $status = $is_timeout ? 'Connection: FAIL (TIMEOUT)' : 'Connection: FAIL';
-      $details = 'FAIL - ' . $message;
-      \Drupal::state()->set('ai_conversation.last_connection_test_status', $status);
-      \Drupal::state()->set('ai_conversation.last_connection_test_details', $details);
-      $this->logger->error('Connection test submit handler exception: @message', ['@message' => $message]);
+      $message = [
+        '#type' => 'markup',
+        '#markup' => '<div class="messages messages--error">' .
+          $this->t('Connection test failed: @error', ['@error' => $e->getMessage()]) .
+          '</div>',
+      ];
     }
+
+    return $message;
   }
 
   /**
@@ -634,23 +552,50 @@ class AIConversationSettingsForm extends ConfigFormBase {
   public function validateForm(array &$form, FormStateInterface $form_state): void {
     parent::validateForm($form, $form_state);
 
+    // Validate AWS credentials
+    $access_key = $form_state->getValue('aws_access_key_id');
+    $secret_key = $form_state->getValue('aws_secret_access_key');
+    $has_env_access_key = !empty(getenv('AWS_ACCESS_KEY_ID'));
+    $has_env_secret_key = !empty(getenv('AWS_SECRET_ACCESS_KEY'));
+    $has_config_access_key = !empty($this->config('ai_conversation.settings')->get('aws_access_key_id'));
+
+    // If access key provided, secret key must also be provided (unless already in config or env)
+    if (!empty($access_key) && empty($secret_key) && !$has_config_access_key && !$has_env_secret_key) {
+      $form_state->setErrorByName(
+        'aws_secret_access_key',
+        $this->t('AWS Secret Access Key is required when providing a new Access Key ID.')
+      );
+    }
+
+    // If neither config values nor environment variables exist, both must be provided
+    if (empty($access_key) && empty($secret_key) && !$has_env_access_key && !$has_config_access_key) {
+      $form_state->setErrorByName(
+        'aws_access_key_id',
+        $this->t('AWS credentials must be provided either in the form or via environment variables.')
+      );
+    }
   }
 
   /**
    * {@inheritdoc}
    */
   public function submitForm(array &$form, FormStateInterface $form_state): void {
-    $trigger = $form_state->getTriggeringElement();
-    $trigger_name = $trigger['#name'] ?? 'unknown';
-    $this->logger->info('AI settings submitForm triggered by: @trigger', ['@trigger' => $trigger_name]);
-
-    if ($trigger_name === 'test_connection_btn') {
-      $this->logger->info('Skipping config save during connection test button submit');
-      return;
-    }
-
     $config = $this->config('ai_conversation.settings');
 
+    // AWS credentials
+    $access_key = $form_state->getValue('aws_access_key_id');
+    if (!empty($access_key)) {
+      $config->set('aws_access_key_id', $access_key);
+    }
+
+    $secret_key = $form_state->getValue('aws_secret_access_key');
+    if (!empty($secret_key)) {
+      $config->set('aws_secret_access_key', $secret_key);
+    }
+
+    // AWS settings
+    $config->set('aws_region', $form_state->getValue('aws_region'));
+    $config->set('aws_model', $form_state->getValue('aws_model'));
     $config->set('system_prompt', $form_state->getValue('system_prompt'));
 
     // Conversation settings

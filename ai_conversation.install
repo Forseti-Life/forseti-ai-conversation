@@ -143,7 +143,7 @@ function ai_conversation_install() {
     $suggestion_type = NodeType::create([
       'type' => 'community_suggestion',
       'name' => 'Community Suggestion',
-      'description' => 'A suggestion submitted by a community member through Forseti AI',
+      'description' => 'A suggestion submitted by a player through Forseti, Game Master of Dungeoncrawler',
       'settings' => [
         'node' => [
           'options' => [
@@ -571,7 +571,7 @@ function _ai_conversation_complete_removal() {
  * Initialize default system prompt configuration.
  */
 function _ai_conversation_init_system_prompt() {
-  // Use PromptManager to initialize the default system prompt.
+  // Use PromptManager to initialize the default Forseti system prompt
   $prompt_manager = \Drupal::service('ai_conversation.prompt_manager');
   $prompt_manager->initializeDefaultPrompt();
 }
@@ -727,14 +727,14 @@ function ai_conversation_update_8003() {
 }
 
 /**
- * Update system prompt configuration with generic default prompt.
+ * Update system prompt configuration with Forseti Game Master persona.
  */
 function ai_conversation_update_8005() {
-  // Use PromptManager to update to the generic default system prompt.
+  // Use PromptManager to update to Forseti system prompt
   $prompt_manager = \Drupal::service('ai_conversation.prompt_manager');
   $prompt_manager->initializeDefaultPrompt();
   
-  return t('Updated AI conversation system prompt to generic default.');
+  return t('Updated AI conversation system prompt with Forseti Game Master persona.');
 }
 
 /**
@@ -847,315 +847,49 @@ function ai_conversation_update_8008() {
 }
 
 /**
- * Ensure API usage debug/cache columns exist.
+ * Migrate legacy community/safety prompt text to Game Master persona.
  */
 function ai_conversation_update_8009() {
+  $config = \Drupal::configFactory()->getEditable('ai_conversation.settings');
+  $current_prompt = (string) $config->get('system_prompt');
+
+  $looks_legacy =
+    stripos($current_prompt, 'community services platform') !== FALSE ||
+    stripos($current_prompt, 'safety intelligence') !== FALSE ||
+    stripos($current_prompt, 'St. Louis Integration') !== FALSE;
+
+  if ($looks_legacy || trim($current_prompt) === '') {
+    $prompt_manager = \Drupal::service('ai_conversation.prompt_manager');
+    $prompt_manager->initializeDefaultPrompt();
+    return t('Migrated system prompt to Forseti Game Master persona for Dungeoncrawler.');
+  }
+
+  return t('Skipped prompt migration because a custom non-legacy prompt is already configured.');
+}
+
+/**
+ * Fix ai_conversation_api_usage schema: widen prompt_preview and response_preview from
+ * varchar(500) to TEXT so full prompts can be stored without truncation errors.
+ *
+ * Background: the install hook defined these columns as 'type' => 'text' (TEXT) but the
+ * initial DB create used varchar(500). This mismatch caused SQLSTATE[22001] errors when
+ * prompts exceeded 500 chars. The AIApiService now pre-truncates to 490 chars as a safety
+ * guard, but widening the column ensures no future overflow if the limit is ever raised.
+ */
+function ai_conversation_update_8010() {
   $schema = \Drupal::database()->schema();
   $table = 'ai_conversation_api_usage';
 
-  if (!$schema->tableExists($table)) {
-    return t('Skipped API usage table update because @table does not exist.', ['@table' => $table]);
-  }
-
-  if (!$schema->fieldExists($table, 'success')) {
-    $schema->addField($table, 'success', [
-      'type' => 'int',
-      'size' => 'tiny',
-      'not null' => FALSE,
-      'default' => 1,
-      'description' => 'Whether the API call succeeded (1) or failed (0)',
-    ]);
-  }
-
-  if (!$schema->fieldExists($table, 'error_message')) {
-    $schema->addField($table, 'error_message', [
-      'type' => 'text',
-      'size' => 'normal',
-      'not null' => FALSE,
-      'description' => 'Error message if API call failed',
-    ]);
-  }
-
-  if (!$schema->fieldExists($table, 'prompt_preview')) {
-    $schema->addField($table, 'prompt_preview', [
-      'type' => 'text',
-      'size' => 'big',
-      'not null' => FALSE,
-      'description' => 'Full prompt sent to AI for debugging',
-    ]);
-  }
-
-  if (!$schema->fieldExists($table, 'response_preview')) {
-    $schema->addField($table, 'response_preview', [
-      'type' => 'text',
-      'size' => 'big',
-      'not null' => FALSE,
-      'description' => 'Full response from AI for debugging/cache',
-    ]);
-  }
-
-  return t('Ensured API usage debug/cache columns exist (success, error_message, prompt_preview, response_preview).');
-}
-
-/**
- * Grant authenticated users permission to use AI conversations.
- */
-function ai_conversation_update_8010() {
-  $authenticated_role = \Drupal\user\Entity\Role::load('authenticated');
-  if (!$authenticated_role) {
-    return t('Skipped AI conversation permission update because the authenticated role does not exist.');
-  }
-
-  if ($authenticated_role->hasPermission('use ai conversation')) {
-    return t('Authenticated users already have the use ai conversation permission.');
-  }
-
-  $authenticated_role->grantPermission('use ai conversation');
-  $authenticated_role->save();
-
-  return t('Granted authenticated users the use ai conversation permission.');
-}
-
-/**
- * Switch existing installs to the local LLM provider defaults.
- */
-function ai_conversation_update_8011() {
-  \Drupal::configFactory()->getEditable('ai_conversation.provider_settings')
-    ->set('default_provider', 'ollama')
-    ->set('ollama_base_url', 'http://127.0.0.1:8080')
-    ->set('ollama_available_models', ['mistral-7b-instruct-v0.2.Q4_K_M.gguf'])
-    ->save(TRUE);
-
-  return t('Updated AI Conversation to use the local LLM provider by default and disabled Bedrock as the active provider.');
-}
-
-/**
- * Normalize prompts for local LLM usage and remove legacy provider branding.
- */
-function ai_conversation_update_8012() {
-  $prompt_manager = \Drupal::service('ai_conversation.prompt_manager');
-  $config = \Drupal::configFactory()->getEditable('ai_conversation.settings');
-  $current_prompt = (string) $config->get('system_prompt');
-
-  $config
-    ->set('aws_model', 'local/mistral-7b-instruct-v0.2.Q4_K_M.gguf')
-    ->set('system_prompt', $current_prompt !== '' ? $prompt_manager->normalizePromptText($current_prompt) : $prompt_manager->getBaseSystemPrompt())
-    ->save(TRUE);
-
-  $updated_conversations = 0;
-  $nids = \Drupal::entityQuery('node')
-    ->condition('type', 'ai_conversation')
-    ->accessCheck(FALSE)
-    ->execute();
-
-  if (!empty($nids)) {
-    $storage = \Drupal::entityTypeManager()->getStorage('node');
-    foreach ($storage->loadMultiple($nids) as $conversation) {
-      if (!$conversation->hasField('field_context') || $conversation->get('field_context')->isEmpty()) {
-        continue;
-      }
-
-      $context_value = (string) $conversation->get('field_context')->value;
-      $normalized_context = $prompt_manager->normalizePromptText($context_value);
-      if ($normalized_context === $context_value) {
-        continue;
-      }
-
-      $conversation->set('field_context', [
-        'value' => $normalized_context,
-        'format' => $conversation->get('field_context')->format ?: 'basic_html',
+  foreach (['prompt_preview', 'response_preview'] as $field) {
+    if ($schema->fieldExists($table, $field)) {
+      $schema->changeField($table, $field, $field, [
+        'type' => 'text',
+        'size' => 'normal',
+        'not null' => FALSE,
+        'description' => 'Preview of the prompt/response sent to the AI (truncated for safety).',
       ]);
-      $conversation->save();
-      $updated_conversations++;
     }
   }
 
-  return t('Normalized AI Conversation prompts for local LLM usage and updated @count conversation contexts.', [
-    '@count' => $updated_conversations,
-  ]);
-}
-
-/**
- * Refine local-model disclosure text in prompts after the initial migration.
- */
-function ai_conversation_update_8013() {
-  $prompt_manager = \Drupal::service('ai_conversation.prompt_manager');
-  $config = \Drupal::configFactory()->getEditable('ai_conversation.settings');
-  $current_prompt = (string) $config->get('system_prompt');
-  $normalized_prompt = $current_prompt !== '' ? $prompt_manager->normalizePromptText($current_prompt) : $prompt_manager->getBaseSystemPrompt();
-
-  if (strpos($normalized_prompt, "Forseti's locally hosted language model") === FALSE) {
-    $normalized_prompt .= "\n\nMODEL DISCLOSURE:\n- If asked about the model or provider, explain that responses come from Forseti's locally hosted language model unless site-specific instructions say otherwise.";
-  }
-
-  $config
-    ->set('system_prompt', $normalized_prompt)
-    ->save(TRUE);
-
-  $updated_conversations = 0;
-  $nids = \Drupal::entityQuery('node')
-    ->condition('type', 'ai_conversation')
-    ->accessCheck(FALSE)
-    ->execute();
-
-  if (!empty($nids)) {
-    $storage = \Drupal::entityTypeManager()->getStorage('node');
-    foreach ($storage->loadMultiple($nids) as $conversation) {
-      if (!$conversation->hasField('field_context') || $conversation->get('field_context')->isEmpty()) {
-        continue;
-      }
-
-      $context_value = (string) $conversation->get('field_context')->value;
-      $normalized_context = $prompt_manager->normalizePromptText($context_value);
-      if ($normalized_context === $context_value) {
-        continue;
-      }
-
-      $conversation->set('field_context', [
-        'value' => $normalized_context,
-        'format' => $conversation->get('field_context')->format ?: 'basic_html',
-      ]);
-      $conversation->save();
-      $updated_conversations++;
-    }
-  }
-
-  return t('Refined local-model disclosure text in AI Conversation prompts and updated @count conversation contexts.', [
-    '@count' => $updated_conversations,
-  ]);
-}
-
-/**
- * Apply the final legacy provider text normalization patterns.
- */
-function ai_conversation_update_8014() {
-  $prompt_manager = \Drupal::service('ai_conversation.prompt_manager');
-  $config = \Drupal::configFactory()->getEditable('ai_conversation.settings');
-  $current_prompt = (string) $config->get('system_prompt');
-
-  $config
-    ->set('system_prompt', $current_prompt !== '' ? $prompt_manager->normalizePromptText($current_prompt) : $prompt_manager->getBaseSystemPrompt())
-    ->save(TRUE);
-
-  $updated_conversations = 0;
-  $nids = \Drupal::entityQuery('node')
-    ->condition('type', 'ai_conversation')
-    ->accessCheck(FALSE)
-    ->execute();
-
-  if (!empty($nids)) {
-    $storage = \Drupal::entityTypeManager()->getStorage('node');
-    foreach ($storage->loadMultiple($nids) as $conversation) {
-      if (!$conversation->hasField('field_context') || $conversation->get('field_context')->isEmpty()) {
-        continue;
-      }
-
-      $context_value = (string) $conversation->get('field_context')->value;
-      $normalized_context = $prompt_manager->normalizePromptText($context_value);
-      if ($normalized_context === $context_value) {
-        continue;
-      }
-
-      $conversation->set('field_context', [
-        'value' => $normalized_context,
-        'format' => $conversation->get('field_context')->format ?: 'basic_html',
-      ]);
-      $conversation->save();
-      $updated_conversations++;
-    }
-  }
-
-  return t('Applied final AI Conversation local-model text normalization and updated @count conversation contexts.', [
-    '@count' => $updated_conversations,
-  ]);
-}
-
-/**
- * Clean up any previously mangled local-model disclosure text.
- */
-function ai_conversation_update_8015() {
-  $prompt_manager = \Drupal::service('ai_conversation.prompt_manager');
-  $config = \Drupal::configFactory()->getEditable('ai_conversation.settings');
-  $current_prompt = (string) $config->get('system_prompt');
-
-  $config
-    ->set('system_prompt', $current_prompt !== '' ? $prompt_manager->normalizePromptText($current_prompt) : $prompt_manager->getBaseSystemPrompt())
-    ->save(TRUE);
-
-  $updated_conversations = 0;
-  $nids = \Drupal::entityQuery('node')
-    ->condition('type', 'ai_conversation')
-    ->accessCheck(FALSE)
-    ->execute();
-
-  if (!empty($nids)) {
-    $storage = \Drupal::entityTypeManager()->getStorage('node');
-    foreach ($storage->loadMultiple($nids) as $conversation) {
-      if (!$conversation->hasField('field_context') || $conversation->get('field_context')->isEmpty()) {
-        continue;
-      }
-
-      $context_value = (string) $conversation->get('field_context')->value;
-      $normalized_context = $prompt_manager->normalizePromptText($context_value);
-      if ($normalized_context === $context_value) {
-        continue;
-      }
-
-      $conversation->set('field_context', [
-        'value' => $normalized_context,
-        'format' => $conversation->get('field_context')->format ?: 'basic_html',
-      ]);
-      $conversation->save();
-      $updated_conversations++;
-    }
-  }
-
-  return t('Cleaned up AI Conversation local-model disclosure text and updated @count conversation contexts.', [
-    '@count' => $updated_conversations,
-  ]);
-}
-
-/**
- * Remove remaining Bedrock-era prompt text from installed configurations.
- */
-function ai_conversation_update_8016() {
-  $prompt_manager = \Drupal::service('ai_conversation.prompt_manager');
-  $config = \Drupal::configFactory()->getEditable('ai_conversation.settings');
-  $current_prompt = (string) $config->get('system_prompt');
-
-  $config
-    ->set('system_prompt', $current_prompt !== '' ? $prompt_manager->normalizePromptText($current_prompt) : $prompt_manager->getBaseSystemPrompt())
-    ->save(TRUE);
-
-  $updated_conversations = 0;
-  $nids = \Drupal::entityQuery('node')
-    ->condition('type', 'ai_conversation')
-    ->accessCheck(FALSE)
-    ->execute();
-
-  if (!empty($nids)) {
-    $storage = \Drupal::entityTypeManager()->getStorage('node');
-    foreach ($storage->loadMultiple($nids) as $conversation) {
-      if (!$conversation->hasField('field_context') || $conversation->get('field_context')->isEmpty()) {
-        continue;
-      }
-
-      $context_value = (string) $conversation->get('field_context')->value;
-      $normalized_context = $prompt_manager->normalizePromptText($context_value);
-      if ($normalized_context === $context_value) {
-        continue;
-      }
-
-      $conversation->set('field_context', [
-        'value' => $normalized_context,
-        'format' => $conversation->get('field_context')->format ?: 'basic_html',
-      ]);
-      $conversation->save();
-      $updated_conversations++;
-    }
-  }
-
-  return t('Removed remaining Bedrock-era AI Conversation prompt text and updated @count conversation contexts.', [
-    '@count' => $updated_conversations,
-  ]);
+  return t('Widened ai_conversation_api_usage.prompt_preview and response_preview from varchar(500) to TEXT.');
 }

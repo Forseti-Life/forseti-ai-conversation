@@ -1,18 +1,33 @@
 /* User AI Conversations Block Styles - Forseti Theme */
 
 .user-ai-conversations {
-  background: #1a1a2e;
-  border: 1px solid rgba(0, 212, 255, 0.3);
+  --uc-surface-primary: var(--dc-surface-primary);
+  --uc-surface-elevated: var(--dc-surface-elevated);
+  --uc-text: var(--dc-text-primary);
+  --uc-text-muted: var(--bs-secondary-color);
+  --uc-accent: var(--dc-accent-cyan);
+  --uc-accent-strong: var(--dc-accent-cyan-strong);
+  --uc-primary: var(--bs-primary);
+  --uc-secondary: var(--bs-secondary);
+  --uc-success: var(--bs-success);
+  --uc-border: var(--bs-border-color);
+  --uc-border-accent: color-mix(in srgb, var(--uc-accent) 30%, transparent);
+  --uc-border-accent-soft: color-mix(in srgb, var(--uc-accent) 20%, transparent);
+}
+
+.user-ai-conversations {
+  background: var(--uc-surface-primary);
+  border: 1px solid var(--uc-border-accent);
   border-radius: 8px;
   padding: 20px;
   margin-bottom: 20px;
 }
 
 .conversations-title {
-  color: #00d4ff;
+  color: var(--uc-accent);
   margin-top: 0;
   margin-bottom: 20px;
-  border-bottom: 2px solid rgba(0, 212, 255, 0.3);
+  border-bottom: 2px solid var(--uc-border-accent);
   padding-bottom: 10px;
 }
 
@@ -22,8 +37,8 @@
 }
 
 .conversation-item {
-  background: #16213e;
-  border: 1px solid rgba(0, 212, 255, 0.2);
+  background: var(--uc-surface-elevated);
+  border: 1px solid var(--uc-border-accent-soft);
   border-radius: 6px;
   padding: 15px;
   margin-bottom: 15px;
@@ -31,8 +46,8 @@
 }
 
 .conversation-item:hover {
-  box-shadow: 0 2px 8px rgba(0, 212, 255, 0.3);
-  border-color: #00d4ff;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--uc-accent) 30%, transparent);
+  border-color: var(--uc-accent);
 }
 
 .conversation-item:last-child {
@@ -52,7 +67,7 @@
 }
 
 .conversation-title .chat-link {
-  color: #00d4ff;
+  color: var(--uc-accent);
   text-decoration: none;
   font-size: 1.1em;
   font-weight: 600;
@@ -60,19 +75,19 @@
 }
 
 .conversation-title .chat-link:hover {
-  color: #33e0ff;
+  color: var(--uc-accent-strong);
   text-decoration: underline;
 }
 
 .conversation-meta {
   font-size: 0.85em;
-  color: #b0b0b0;
+  color: var(--uc-text-muted);
   margin-left: 15px;
   white-space: nowrap;
 }
 
 .conversation-preview {
-  color: #e0e0e0;
+  color: var(--uc-text);
   font-style: italic;
   margin-bottom: 10px;
   font-size: 0.9em;
@@ -87,11 +102,11 @@
 }
 
 .stat-item {
-  color: #e0e0e0;
+  color: var(--uc-text);
 }
 
 .stat-item strong {
-  color: #00d4ff;
+  color: var(--uc-accent);
 }
 
 .conversation-actions {
@@ -111,28 +126,28 @@
 }
 
 .conversation-actions .btn-primary {
-  background-color: #007bff;
-  color: white;
-  border: 1px solid #007bff;
+  background-color: var(--uc-primary);
+  color: var(--bs-light);
+  border: 1px solid var(--uc-primary);
 }
 
 .conversation-actions .btn-primary:hover {
-  background-color: #0056b3;
-  border-color: #0056b3;
-  color: white;
+  background-color: color-mix(in srgb, var(--uc-primary) 80%, black);
+  border-color: color-mix(in srgb, var(--uc-primary) 80%, black);
+  color: var(--bs-light);
   text-decoration: none;
 }
 
 .conversation-actions .btn-secondary {
-  background-color: #6c757d;
-  color: white;
-  border: 1px solid #6c757d;
+  background-color: var(--uc-secondary);
+  color: var(--bs-light);
+  border: 1px solid var(--uc-secondary);
 }
 
 .conversation-actions .btn-secondary:hover {
-  background-color: #545b62;
-  border-color: #545b62;
-  color: white;
+  background-color: color-mix(in srgb, var(--uc-secondary) 80%, black);
+  border-color: color-mix(in srgb, var(--uc-secondary) 80%, black);
+  color: var(--bs-light);
   text-decoration: none;
 }
 
@@ -140,13 +155,13 @@
   text-align: center;
   margin-top: 20px;
   padding-top: 15px;
-  border-top: 1px solid #dee2e6;
+  border-top: 1px solid var(--uc-border);
 }
 
 .conversations-footer .btn-success {
-  background-color: #28a745;
-  color: white;
-  border: 1px solid #28a745;
+  background-color: var(--uc-success);
+  color: var(--bs-light);
+  border: 1px solid var(--uc-success);
   padding: 10px 20px;
   font-weight: 600;
   text-decoration: none;
@@ -156,23 +171,23 @@
 }
 
 .conversations-footer .btn-success:hover {
-  background-color: #218838;
-  border-color: #218838;
-  color: white;
+  background-color: color-mix(in srgb, var(--uc-success) 80%, black);
+  border-color: color-mix(in srgb, var(--uc-success) 80%, black);
+  color: var(--bs-light);
   text-decoration: none;
   transform: translateY(-1px);
-  box-shadow: 0 2px 4px rgba(40, 167, 69, 0.3);
+  box-shadow: 0 2px 4px color-mix(in srgb, var(--uc-success) 35%, transparent);
 }
 
 .user-conversations-empty {
   text-align: center;
   padding: 30px;
-  color: #6c757d;
+  color: var(--uc-text-muted);
   font-style: italic;
 }
 
 .user-conversations-empty a {
-  color: #007bff;
+  color: var(--uc-primary);
   font-weight: 600;
   text-decoration: none;
 }

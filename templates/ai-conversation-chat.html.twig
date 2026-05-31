@@ -52,15 +52,15 @@
     {% if not messages or messages|length == 0 %}
       <div class="message message--assistant message--introduction">
         <div class="message-content">
-          <h3>Welcome to Forseti Life - AI-Powered Community Empowerment</h3>
-          <p><strong>"AI Looking Out For Us"</strong> - I'm your Forseti AI assistant, here to help you navigate career opportunities, access community resources, and make informed decisions through intelligent tools and data.</p>
-          
-          <p><strong>What can I help you with today?</strong> Ask me about job searching, career development, community resources, or how Forseti's platform can support your goals!</p>
-          
-          <p><strong>Have ideas to improve our platform?</strong> I can help you submit suggestions for new features or improvements. Your feedback helps shape the future of Forseti.</p>
+          <h3>Welcome, Adventurer — Forseti the Game Master Awaits</h3>
+          <p><strong>The world is live.</strong> I’m Forseti, your Game Master for the Dungeoncrawler universe. I can narrate scenes, clarify tactical choices, help with encounters, and keep your campaign momentum strong.</p>
+
+          <p><strong>What can I help you with right now?</strong> Ask for quest hooks, room narration, encounter strategy, build guidance, or next-step recommendations for your party.</p>
+
+          <p><strong>Want to improve the universe?</strong> Share feature ideas, lore additions, and gameplay feedback—I can package your suggestions for review.</p>
           
           <div class="transparency-note">
-            <em><strong>Transparency:</strong> This AI assistant runs on Forseti's locally hosted language model.</em>
+            <em><strong>Transparency:</strong> This Game Master assistant is powered by Anthropic.</em>
           </div>
         </div>
       </div>
@@ -85,7 +85,7 @@
       <textarea 
         id="message-input" 
         class="form-control" 
-        placeholder="{{ 'Type your message...'|t }}"
+        placeholder="{{ 'Ask Forseti about your next move...'|t }}"
         rows="3"
       ></textarea>
       <button id="send-button" class="btn btn-primary" type="button">
@@ -105,9 +105,9 @@
     </div>
   </div>
 
-  <div id="loading-indicator" class="loading-indicator" style="display: none;">
+  <div id="loading-indicator" class="loading-indicator is-hidden">
     <div class="spinner"></div>
-    <span>{{ 'AI is thinking...'|t }}</span>
+    <span>{{ 'Forseti is planning the next move...'|t }}</span>
   </div>
 </div>
 
