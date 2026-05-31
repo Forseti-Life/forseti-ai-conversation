@@ -11,7 +11,7 @@ use Symfony\Component\HttpFoundation\JsonResponse;
 class UtilityController extends ControllerBase {
 
   /**
-   * Get content from node 10 (Forseti platform information).
+    * Get content from node 10 (Forseti world context information).
    */
   public function getNode10Content() {
     $content = "Node not found";

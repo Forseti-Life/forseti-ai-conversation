@@ -42,7 +42,7 @@ class AdminController extends ControllerBase {
    * Force update the system prompt configuration.
    */
   public function updateSystemPrompt() {
-    // Get the default Forseti system prompt from PromptManager
+    // Get the default Forseti Game Master system prompt from PromptManager
     $system_prompt = $this->promptManager->getBaseSystemPrompt();
     
     // Save using PromptManager
@@ -50,7 +50,7 @@ class AdminController extends ControllerBase {
     
     return new JsonResponse([
       'success' => $success,
-      'message' => $success ? 'Forseti system prompt updated successfully' : 'Failed to update system prompt',
+      'message' => $success ? 'Forseti Game Master system prompt updated successfully' : 'Failed to update system prompt',
       'prompt_length' => strlen($system_prompt),
     ]);
   }

@@ -1,4 +1,4 @@
-(function($, Drupal, once) {
+(function($, Drupal) {
   'use strict';
 
   Drupal.behaviors.aiConversationChat = {
@@ -7,8 +7,7 @@
       console.log('📍 Context:', context);
       console.log('📍 Settings:', settings);
       
-      const chatElement = once('ai-conversation-chat', '.ai-conversation-chat', context)[0];
-      const $chatContainer = chatElement ? $(chatElement) : $();
+      const $chatContainer = $('.ai-conversation-chat', context);
       console.log('📦 Chat container found:', $chatContainer.length > 0);
       
       if ($chatContainer.length === 0) {
@@ -455,4 +454,4 @@
     };
   })(Drupal, once);
 
-})(jQuery, Drupal, once);
+})(jQuery, Drupal);

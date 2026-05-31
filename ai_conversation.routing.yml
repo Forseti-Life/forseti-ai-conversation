@@ -14,19 +14,11 @@ ai_conversation.usage_dashboard:
   requirements:
     _permission: 'administer site configuration'
 
-ai_conversation.suggestion_tracking:
-  path: '/admin/reports/suggestion-tracking'
-  defaults:
-    _controller: '\Drupal\ai_conversation\Controller\SuggestionTrackingController::page'
-    _title: 'Suggestion Tracking'
-  requirements:
-    _permission: 'administer site configuration'
-
 ai_conversation.model_pricing:
   path: '/admin/reports/genai-pricing'
   defaults:
     _controller: '\Drupal\ai_conversation\Controller\UsageReportController::pricing'
-    _title: 'Model Pricing Reference'
+    _title: 'Claude Model Pricing'
   requirements:
     _permission: 'administer site configuration'
 
@@ -86,7 +78,7 @@ ai_conversation.claude_demo:
   path: '/clauddemo'
   defaults:
     _controller: '\Drupal\ai_conversation\Controller\ChatController::claudeDemo'
-    _title: 'AI Demo'
+    _title: 'Claude Demo'
   requirements:
     _permission: 'use ai conversation'
 
@@ -94,7 +86,7 @@ ai_conversation.chat_interface:
   path: '/node/{node}/chat'
   defaults:
     _controller: '\Drupal\ai_conversation\Controller\ChatController::chatInterface'
-    _title: 'AI Chat'
+    _title: 'Forseti GM Chat'
   requirements:
     _permission: 'use ai conversation'
     _entity_access: 'node.view'
@@ -110,6 +102,7 @@ ai_conversation.send_message:
     _controller: '\Drupal\ai_conversation\Controller\ChatController::sendMessage'
   requirements:
     _permission: 'use ai conversation'
+    _csrf_token: 'TRUE'
 
 ai_conversation.get_stats:
   path: '/ai-conversation/stats'
@@ -133,20 +126,11 @@ ai_conversation.trigger_summary:
       node:
         type: entity:node
 
-ai_conversation.forseti_chat:
-  path: '/forseti/chat'
-  defaults:
-    _controller: '\Drupal\ai_conversation\Controller\ChatController::forsetiChat'
-    _title: 'AI Chat'
-  requirements:
-    _permission: 'use ai conversation'
-    _user_is_logged_in: 'TRUE'
-
 ai_conversation.start_chat:
   path: '/ai-chat'
   defaults:
     _controller: '\Drupal\ai_conversation\Controller\ChatController::startChat'
-    _title: 'AI Chat'
+    _title: 'Forseti GM Chat'
   requirements:
     _permission: 'use ai conversation'
 
@@ -210,55 +194,3 @@ ai_conversation.api_get_stats:
     _method: 'GET'
     _format: 'json'
     conversation_id: \d+
-
-forseti.conversations:
-  path: '/forseti/conversations'
-  defaults:
-    _controller: '\Drupal\ai_conversation\Controller\ChatController::conversationListPage'
-    _title: 'My Conversations'
-  methods: [GET]
-  requirements:
-    _permission: 'use ai conversation'
-    _user_is_logged_in: 'TRUE'
-
-forseti.conversation_delete:
-  path: '/forseti/conversations/{conversation_id}/delete'
-  defaults:
-    _controller: '\Drupal\ai_conversation\Controller\ChatController::conversationDelete'
-    _title: 'Delete Conversation'
-  methods: [POST]
-  requirements:
-    _permission: 'use ai conversation'
-    _user_is_logged_in: 'TRUE'
-    _csrf_token: 'TRUE'
-    conversation_id: \d+
-
-forseti.conversation_export:
-  path: '/forseti/conversation/{conversation_id}/export'
-  defaults:
-    _controller: '\Drupal\ai_conversation\Controller\ChatController::conversationExport'
-    _title: 'Export Conversation'
-  methods: [GET]
-  requirements:
-    _permission: 'use ai conversation'
-    _user_is_logged_in: 'TRUE'
-    conversation_id: \d+
-
-ai_conversation.api_chat:
-  path: '/api/chat'
-  defaults:
-    _controller: '\Drupal\ai_conversation\Controller\ChatController::apiChat'
-    _title: 'AI Chat API'
-  methods: [POST]
-  requirements:
-    _user_is_logged_in: 'TRUE'
-    _csrf_token: 'TRUE'
-
-# AC-1: AI Provider Selection admin form.
-ai_conversation.ai_provider_settings:
-  path: '/admin/config/forseti/ai-provider'
-  defaults:
-    _form: '\Drupal\ai_conversation\Form\AiProviderSettingsForm'
-    _title: 'AI Provider Settings'
-  requirements:
-    _permission: 'administer site configuration'
