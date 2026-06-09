@@ -206,7 +206,7 @@ class AIConversationSettingsForm extends ConfigFormBase {
       '#type' => 'textarea',
       '#title' => $this->t('System Prompt'),
       '#default_value' => $config->get('system_prompt'),
-      '#description' => $this->t('The system prompt that defines Forseti\'s Game Master role, voice, and world context.'),
+      '#description' => $this->t('The system prompt that defines Forseti Assistance behavior, voice, and domain focus.'),
       '#rows' => self::DEFAULT_SYSTEM_PROMPT_ROWS,
       '#required' => FALSE,
     ];

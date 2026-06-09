@@ -143,7 +143,7 @@ class ChatController extends ControllerBase {
   }
 
   /**
-    * Start Game Master chat - handles smart user redirect logic.
+    * Start Forseti Assistance chat - handles smart user redirect logic.
    *
    * For anonymous users: redirects to registration with destination parameter
    * For authenticated users: creates new conversation and redirects to chat
@@ -164,11 +164,11 @@ class ChatController extends ControllerBase {
       // Create new AI conversation node for authenticated user
       $conversation = $this->entityTypeManager->getStorage('node')->create([
         'type' => 'ai_conversation',
-        'title' => 'Forseti GM Session - ' . date('Y-m-d H:i:s'),
+        'title' => 'Forseti Assistance Session - ' . date('Y-m-d H:i:s'),
         'uid' => $this->currentUser->id(),
         'status' => 1,
         'field_context' => [
-          'value' => 'You are Forseti, the Game Master of the Dungeoncrawler universe. Guide players with immersive narration, tactical clarity, fair rulings, and consistent world logic.',
+          'value' => 'You are Forseti Assistance for forseti.life. Help users with resume tailoring, Job Hunter workflows, onboarding, and practical platform guidance.',
           'format' => 'basic_html'
         ],
         'field_message_count' => ['value' => 0],
@@ -182,7 +182,7 @@ class ChatController extends ControllerBase {
         'node' => $conversation->id()
       ]);
       
-      $this->messenger()->addStatus($this->t('New Forseti Game Master session started successfully!'));
+      $this->messenger()->addStatus($this->t('New Forseti Assistance session started successfully!'));
       
       return new \Symfony\Component\HttpFoundation\RedirectResponse($chat_url->toString());
       
@@ -397,7 +397,7 @@ class ChatController extends ControllerBase {
   }
 
   /**
-  * Create a new GM conversation node and redirect to chat interface.
+  * Create a new assistance conversation node and redirect to chat interface.
    *
    * @return \Symfony\Component\HttpFoundation\RedirectResponse
    *   Redirect to the chat interface for the newly created node.
@@ -407,7 +407,7 @@ class ChatController extends ControllerBase {
       // Create a new AI conversation node for the current user
       $node = $this->entityTypeManager->getStorage('node')->create([
         'type' => 'ai_conversation',
-        'title' => 'Forseti GM Session - ' . date('Y-m-d H:i:s'),
+        'title' => 'Forseti Assistance Session - ' . date('Y-m-d H:i:s'),
         'uid' => $this->currentUser->id(),
         'status' => 1,
         'field_conversation_data' => [

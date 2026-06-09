@@ -78,7 +78,7 @@ function ai_conversation_entity_view(array &$build, EntityInterface $entity, Ent
     // Add a link to the chat interface.
     $build['chat_link'] = [
       '#type' => 'link',
-      '#title' => t('Start GM Session'),
+      '#title' => t('Start Assistance Session'),
       '#url' => Url::fromRoute('ai_conversation.chat_interface', ['node' => $entity->id()]),
       '#attributes' => [
         'class' => ['btn', 'btn-primary'],
@@ -96,7 +96,7 @@ function ai_conversation_entity_operation(EntityInterface $entity) {
   
   if ($entity->getEntityTypeId() === 'node' && $entity->bundle() === 'ai_conversation') {
     $operations['chat'] = [
-      'title' => t('GM Chat'),
+      'title' => t('Assistance Chat'),
       'url' => Url::fromRoute('ai_conversation.chat_interface', ['node' => $entity->id()]),
       'weight' => 50,
     ];

@@ -143,7 +143,7 @@ function ai_conversation_install() {
     $suggestion_type = NodeType::create([
       'type' => 'community_suggestion',
       'name' => 'Community Suggestion',
-      'description' => 'A suggestion submitted by a player through Forseti, Game Master of Dungeoncrawler',
+      'description' => 'A suggestion submitted through Forseti Assistance',
       'settings' => [
         'node' => [
           'options' => [
@@ -727,14 +727,14 @@ function ai_conversation_update_8003() {
 }
 
 /**
- * Update system prompt configuration with Forseti Game Master persona.
+ * Update system prompt configuration with the latest default persona.
  */
 function ai_conversation_update_8005() {
-  // Use PromptManager to update to Forseti system prompt
+  // Use PromptManager to update to the latest Forseti prompt.
   $prompt_manager = \Drupal::service('ai_conversation.prompt_manager');
   $prompt_manager->initializeDefaultPrompt();
   
-  return t('Updated AI conversation system prompt with Forseti Game Master persona.');
+  return t('Updated AI conversation system prompt with the latest Forseti Assistance persona.');
 }
 
 /**
@@ -847,7 +847,7 @@ function ai_conversation_update_8008() {
 }
 
 /**
- * Migrate legacy community/safety prompt text to Game Master persona.
+ * Migrate legacy community/safety prompt text to the latest default persona.
  */
 function ai_conversation_update_8009() {
   $config = \Drupal::configFactory()->getEditable('ai_conversation.settings');
@@ -861,7 +861,7 @@ function ai_conversation_update_8009() {
   if ($looks_legacy || trim($current_prompt) === '') {
     $prompt_manager = \Drupal::service('ai_conversation.prompt_manager');
     $prompt_manager->initializeDefaultPrompt();
-    return t('Migrated system prompt to Forseti Game Master persona for Dungeoncrawler.');
+    return t('Migrated system prompt to the latest Forseti Assistance persona.');
   }
 
   return t('Skipped prompt migration because a custom non-legacy prompt is already configured.');

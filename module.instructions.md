@@ -3,6 +3,8 @@
 ## Purpose
 `ai_conversation` is the shared AI conversation foundation module used by Dungeoncrawler and Forseti. It owns conversation API endpoints, model invocation, prompt handling, and chat UX integration.
 
+Default persona behavior is **Forseti Assistance** (generic forseti.life support), with current focus on resume tailoring and Job Hunter workflows. Site-specific consumers may still layer additional context at runtime.
+
 ## Source of truth
 - Canonical repository: `/home/ubuntu/forseti.life/ai-conversation`
 - Dungeoncrawler site context: `org-chart/sites/dungeoncrawler/site.instructions.md`

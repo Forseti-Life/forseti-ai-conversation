@@ -1165,8 +1165,8 @@ class AIApiService {
   /**
    * Create a community suggestion from in-game context (no conversation node).
    *
-   * Used by the dungeoncrawler room chat pipeline where suggestions originate
-   * from the GM reply rather than an ai_conversation node.
+   * Used by external chat pipelines where suggestions originate from an
+   * assistant reply rather than an ai_conversation node.
    *
    * @param string $summary
    *   AI-generated summary of the suggestion.

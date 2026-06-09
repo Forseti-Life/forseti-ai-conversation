@@ -8,7 +8,7 @@
 
 The AI Conversation module provides a sophisticated conversational AI interface powered by AWS Bedrock and Claude 3.5 Sonnet. It features an intelligent **rolling summary system** that allows for unlimited conversation length while maintaining context efficiency and managing token costs.
 
-For Dungeoncrawler, the assistant persona is configured as **Forseti, the Game Master**, with all player-facing chat copy and default prompt language aligned to that voice.
+By default, the assistant persona is configured as **Forseti Assistance** for generic forseti.life support, with current focus on resume tailoring and Job Hunter workflows.
 
 ## Complete Workflow
 
@@ -39,7 +39,7 @@ The AI Conversation module uses a **node-centric approach** where each conversat
 
 #### **Step 2: Start Chatting**
 1. **Access chat interface:** Navigate to `/node/{nid}/chat` 
-  - Example: `https://dungeoncrawler.forseti.life/node/11/chat`
+  - Example: `https://forseti.life/node/11/chat`
    - Or click "Start Chat" link from node view page
 
 2. **Chat interface loads:**

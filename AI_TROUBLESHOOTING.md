@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the comprehensive troubleshooting system for GenAI operations in the Dungeoncrawler application. All AI API calls are now tracked, logged, and queryable for debugging.
+This document describes the comprehensive troubleshooting system for GenAI operations in Forseti applications using ai_conversation. All AI API calls are tracked, logged, and queryable for debugging.
 
 ## Architecture
 
