@@ -1,39 +1,21 @@
 chat-interface:
-  version: 1.x
-  js:
-    js/chat-interface.js: {}
-  dependencies:
-    - core/jquery
-    - core/drupal
-
-user-conversations-block:
-  version: 1.x
+  version: VERSION
   css:
     theme:
-      css/user-conversations-block.css: {}
+      css/ai-conversation-chat.css: {}
+  js:
+    js/ai-conversation-chat.js: {}
   dependencies:
     - core/drupal
+    - core/jquery
 
-usage-dashboard:
-  version: 1.x
+admin-dashboard:
+  version: VERSION
   css:
     theme:
       css/usage-dashboard.css: {}
+  js:
+    js/usage-dashboard.js: {}
   dependencies:
     - core/drupal
-
-model-pricing:
-  version: 1.x
-  css:
-    theme:
-      css/ai-model-pricing.css: {}
-  dependencies:
-    - core/drupal
-
-genai-debug:
-  version: 1.x
-  css:
-    theme:
-      css/genai-debug.css: {}
-  dependencies:
-    - core/drupal
+    - core/charts

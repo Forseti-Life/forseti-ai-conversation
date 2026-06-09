@@ -1,14 +1,12 @@
 # AI Conversation Module
 
-**Last Updated:** February 18, 2026
+**Last Updated:** February 6, 2026
 
 # AI Conversation Module
 
 ## Overview
 
-The AI Conversation module provides a sophisticated conversational AI interface powered by AWS Bedrock and Claude 3.5 Sonnet. It features an intelligent **rolling summary system** that allows for unlimited conversation length while maintaining context efficiency and managing token costs.
-
-By default, the assistant persona is configured as **Forseti Assistance** for generic forseti.life support, with current focus on resume tailoring and Job Hunter workflows.
+The AI Conversation module provides a sophisticated conversational AI interface powered by AWS Bedrock and Claude Sonnet 4.6. It features an intelligent **rolling summary system** that allows for unlimited conversation length while maintaining context efficiency and managing token costs.
 
 ## Complete Workflow
 
@@ -27,7 +25,7 @@ The AI Conversation module uses a **node-centric approach** where each conversat
 1. Navigate to **Content → Add content → AI Conversation**
 2. **Required fields:**
    - **Title:** Name your conversation (e.g., "Project Planning Discussion")
-   - **AI Model:** Select model (defaults to Claude 3.5 Sonnet)
+   - **AI Model:** Select model (defaults to Claude Sonnet 4.6)
    - **Context:** Optional system prompt to guide AI behavior
 
 3. **Optional configuration:**
@@ -39,7 +37,7 @@ The AI Conversation module uses a **node-centric approach** where each conversat
 
 #### **Step 2: Start Chatting**
 1. **Access chat interface:** Navigate to `/node/{nid}/chat` 
-  - Example: `https://forseti.life/node/11/chat`
+   - Example: `https://forseti.com/node/11/chat`
    - Or click "Start Chat" link from node view page
 
 2. **Chat interface loads:**
@@ -69,10 +67,10 @@ The AI Conversation module uses a **node-centric approach** where each conversat
 ## Key Features
 
 ### 🤖 **AWS Bedrock Integration**
-- **Primary Model:** Claude 3.5 Sonnet (anthropic.claude-3-5-sonnet-20240620-v1:0)
-- **Region:** us-west-2
+- **Primary Model:** Claude Sonnet 4.6 (`us.anthropic.claude-sonnet-4-6`)
+- **Region:** us-east-1 (default, configurable via environment or settings)
 - **Authentication:** Environment variables or IAM roles (no hardcoded credentials)
-- **Fallback Models:** Claude 3 Haiku and Claude 3 Opus support
+- **Fallback Models:** Claude Haiku 4.5 support
 
 ### 🔄 **Intelligent Rolling Summary System**
 - **Automatic Summarization:** Older messages are automatically summarized when conversation exceeds configured limits
@@ -115,7 +113,7 @@ The module creates a custom content type `ai_conversation` that serves as the co
     "timestamp": 1704067200
   }
   ```
-- **`field_ai_model`** (string): AI model identifier (defaults to Claude 3.5 Sonnet)
+- **`field_ai_model`** (string): AI model identifier (defaults to Claude Sonnet 4.6)
 - **`field_context`** (text_long): System prompt/conversation context
 
 **Rolling Summary Fields:**
@@ -202,9 +200,9 @@ The module creates a custom content type `ai_conversation` that serves as the co
 
 3. **AWS Bedrock Call:**
    ```php
-   // Send to Claude 3.5 Sonnet
+   // Send to Claude Sonnet 4.6
    $response = $bedrock->invokeModel([
-     'modelId' => 'anthropic.claude-3-5-sonnet-20240620-v1:0',
+     'modelId' => 'us.anthropic.claude-sonnet-4-6',
      'contentType' => 'application/json',
      'body' => json_encode($request_body)
    ]);
@@ -391,7 +389,7 @@ drush php-eval "_ai_conversation_complete_removal();"
 ```bash
 AWS_ACCESS_KEY_ID=your_access_key_id
 AWS_SECRET_ACCESS_KEY=your_secret_key
-AWS_DEFAULT_REGION=us-west-2
+AWS_DEFAULT_REGION=us-east-1
 ```
 
 #### **IAM Role (Production)**
@@ -402,7 +400,7 @@ AWS_DEFAULT_REGION=us-west-2
     {
       "Effect": "Allow",
       "Action": "bedrock:InvokeModel",
-      "Resource": "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-*"
+      "Resource": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-*"
     }
   ]
 }
@@ -473,7 +471,7 @@ $response = $ai_service->sendMessage($conversation_node, $message);
 
 #### **"Summary generation failed"**
 - Check AWS Bedrock permissions
-- Verify model availability in us-west-2 region
+- Verify model availability in the configured region
 - Review error logs for detailed messages
 
 #### **Missing conversation history**
@@ -489,8 +487,8 @@ Enable debug mode in settings to get detailed logging:
 - Performance metrics
 
 This module provides a production-ready, scalable foundation for AI-powered conversations with intelligent context management and cost optimization.
-- **Region**: `us-west-2`
-- **Max Tokens**: Configurable (default: 4000)
+- **Region**: `us-east-1` (default, configurable via environment or settings)
+- **Max Tokens**: Configurable (default: 30000)
 
 ### Core Architecture
 
@@ -546,7 +544,7 @@ The module supports multiple ways to configure AWS credentials (in order of prec
 2. **Environment Variables** (Automatic fallback)
    - Set `AWS_ACCESS_KEY_ID`
    - Set `AWS_SECRET_ACCESS_KEY` 
-   - Set `AWS_DEFAULT_REGION` (optional, defaults to us-west-2)
+   - Set `AWS_DEFAULT_REGION` (optional, defaults to us-east-1)
    
    The module will automatically use environment variables if configuration values are empty.
 

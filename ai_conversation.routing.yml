@@ -86,7 +86,7 @@ ai_conversation.chat_interface:
   path: '/node/{node}/chat'
   defaults:
     _controller: '\Drupal\ai_conversation\Controller\ChatController::chatInterface'
-    _title: 'Forseti Assistance Chat'
+    _title: 'Forseti GM Chat'
   requirements:
     _permission: 'use ai conversation'
     _entity_access: 'node.view'
@@ -102,7 +102,6 @@ ai_conversation.send_message:
     _controller: '\Drupal\ai_conversation\Controller\ChatController::sendMessage'
   requirements:
     _permission: 'use ai conversation'
-    _csrf_token: 'TRUE'
 
 ai_conversation.get_stats:
   path: '/ai-conversation/stats'
@@ -130,7 +129,7 @@ ai_conversation.start_chat:
   path: '/ai-chat'
   defaults:
     _controller: '\Drupal\ai_conversation\Controller\ChatController::startChat'
-    _title: 'Forseti Assistance Chat'
+    _title: 'Forseti GM Chat'
   requirements:
     _permission: 'use ai conversation'
 

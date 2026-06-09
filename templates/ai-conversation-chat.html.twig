@@ -52,15 +52,15 @@
     {% if not messages or messages|length == 0 %}
       <div class="message message--assistant message--introduction">
         <div class="message-content">
-          <h3>Welcome to Forseti Assistance</h3>
-          <p><strong>I’m here to help.</strong> I can guide you through resume tailoring, Job Hunter workflows, onboarding, and general Forseti questions.</p>
+          <h3>Welcome, Adventurer — Forseti the Game Master Awaits</h3>
+          <p><strong>The world is live.</strong> I’m Forseti, your Game Master for the Dungeoncrawler universe. I can narrate scenes, clarify tactical choices, help with encounters, and keep your campaign momentum strong.</p>
 
-          <p><strong>What can I help you with right now?</strong> Ask for help tailoring a resume, setting up your profile, navigating the site, or deciding next steps in your job search workflow.</p>
+          <p><strong>What can I help you with right now?</strong> Ask for quest hooks, room narration, encounter strategy, build guidance, or next-step recommendations for your party.</p>
 
-          <p><strong>Want to improve Forseti?</strong> Share feedback, feature requests, or bug reports and I can package them for review.</p>
+          <p><strong>Want to improve the universe?</strong> Share feature ideas, lore additions, and gameplay feedback—I can package your suggestions for review.</p>
           
           <div class="transparency-note">
-            <em><strong>Transparency:</strong> This assistant is powered by Anthropic.</em>
+            <em><strong>Transparency:</strong> This Game Master assistant is powered by Anthropic.</em>
           </div>
         </div>
       </div>
@@ -85,7 +85,7 @@
       <textarea 
         id="message-input" 
         class="form-control" 
-        placeholder="{{ 'Ask Forseti for help with resume tailoring, Job Hunter, or account setup...'|t }}"
+        placeholder="{{ 'Ask Forseti about your next move...'|t }}"
         rows="3"
       ></textarea>
       <button id="send-button" class="btn btn-primary" type="button">
@@ -107,7 +107,7 @@
 
   <div id="loading-indicator" class="loading-indicator is-hidden">
     <div class="spinner"></div>
-    <span>{{ 'Forseti is preparing assistance...'|t }}</span>
+    <span>{{ 'Forseti is planning the next move...'|t }}</span>
   </div>
 </div>
 

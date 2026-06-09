@@ -1,46 +1,68 @@
 ai_conversation.settings:
   type: config_object
-  label: 'AI Conversation settings'
+  label: 'AI Conversation Settings'
   mapping:
-    aws_access_key_id:
+    default_provider:
       type: string
-      label: 'AWS Access Key ID'
-    aws_secret_access_key:
-      type: string
-      label: 'AWS Secret Access Key'
-    aws_region:
-      type: string
-      label: 'AWS Region'
-    aws_model:
-      type: string
-      label: 'AWS Bedrock Model ID'
-    system_prompt:
-      type: text
-      label: 'System Prompt'
-    max_tokens:
-      type: integer
-      label: 'Maximum tokens per response'
-    max_tokens_resume_tailoring:
-      type: integer
-      label: 'Maximum tokens for resume tailoring operations'
-    max_tokens_resume_parsing:
-      type: integer
-      label: 'Maximum tokens for resume parsing operations'
-    max_tokens_cover_letter:
-      type: integer
-      label: 'Maximum tokens for cover letter generation'
-    max_tokens_job_parsing:
-      type: integer
-      label: 'Maximum tokens for job posting parsing'
-    max_recent_messages:
-      type: integer
-      label: 'Maximum recent messages to keep'
-    summary_frequency:
-      type: integer
-      label: 'Update summary every N messages'
-    max_tokens_before_summary:
-      type: integer
-      label: 'Maximum tokens before triggering summary update'
-    debug_logging:
+      label: 'Default AI Provider'
+      description: 'Primary GenAI backend (bedrock or ollama)'
+      default: 'bedrock'
+    
+    enable_user_provider_selection:
       type: boolean
-      label: 'Enable debug logging'
+      label: 'Enable User Provider Selection'
+      description: 'Allow users to override site default provider (Forseti-specific feature)'
+      default: false
+    
+    context_provider:
+      type: string
+      label: 'Context Provider Type'
+      description: 'Type of context (job_search for Forseti, campaign for DungeonCrawler)'
+      default: 'job_search'
+    
+    available_contexts:
+      type: sequence
+      label: 'Available Contexts'
+      description: 'List of context types this site supports'
+      sequence:
+        type: string
+
+ai_conversation.provider_settings:
+  type: config_object
+  label: 'AI Provider Settings'
+  mapping:
+    bedrock:
+      type: mapping
+      label: 'AWS Bedrock Settings'
+      mapping:
+        region:
+          type: string
+          label: 'AWS Region'
+          default: 'us-east-1'
+        model_id:
+          type: string
+          label: 'Default Model ID'
+          default: 'anthropic.claude-3-sonnet-20240229-v1:0'
+        max_tokens:
+          type: integer
+          label: 'Max Tokens'
+          default: 2048
+    
+    ollama:
+      type: mapping
+      label: 'Ollama Settings'
+      mapping:
+        endpoint:
+          type: string
+          label: 'Ollama API Endpoint'
+          description: 'e.g., http://localhost:11434'
+          default: 'http://localhost:11434'
+        model:
+          type: string
+          label: 'Default Model Name'
+          description: 'e.g., llama2, mistral'
+          default: 'llama2'
+        timeout_seconds:
+          type: integer
+          label: 'API Timeout (seconds)'
+          default: 30

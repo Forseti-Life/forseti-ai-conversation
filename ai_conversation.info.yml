@@ -1,11 +1,10 @@
-name: AI Conversation
-description: Enables conversational AI interface with context persistence
+name: AI Conversation (Federated)
+description: Enables conversational AI interface with context persistence. Supports Bedrock and Ollama backends with site-specific configuration overlays.
 type: module
 package: AI
 core_version_requirement: ^9 || ^10 || ^11
 dependencies:
   - drupal:node
   - drupal:field
-  - drupal:options
   - drupal:user
   - drupal:system

@@ -143,7 +143,7 @@ function ai_conversation_install() {
     $suggestion_type = NodeType::create([
       'type' => 'community_suggestion',
       'name' => 'Community Suggestion',
-      'description' => 'A suggestion submitted through Forseti Assistance',
+      'description' => 'A suggestion submitted by a community member through Forseti AI',
       'settings' => [
         'node' => [
           'options' => [
@@ -571,7 +571,7 @@ function _ai_conversation_complete_removal() {
  * Initialize default system prompt configuration.
  */
 function _ai_conversation_init_system_prompt() {
-  // Use PromptManager to initialize the default Forseti system prompt
+  // Use PromptManager to initialize the default system prompt.
   $prompt_manager = \Drupal::service('ai_conversation.prompt_manager');
   $prompt_manager->initializeDefaultPrompt();
 }
@@ -727,14 +727,14 @@ function ai_conversation_update_8003() {
 }
 
 /**
- * Update system prompt configuration with the latest default persona.
+ * Update system prompt configuration with generic default prompt.
  */
 function ai_conversation_update_8005() {
-  // Use PromptManager to update to the latest Forseti prompt.
+  // Use PromptManager to update to the generic default system prompt.
   $prompt_manager = \Drupal::service('ai_conversation.prompt_manager');
   $prompt_manager->initializeDefaultPrompt();
   
-  return t('Updated AI conversation system prompt with the latest Forseti Assistance persona.');
+  return t('Updated AI conversation system prompt to generic default.');
 }
 
 /**
@@ -847,49 +847,52 @@ function ai_conversation_update_8008() {
 }
 
 /**
- * Migrate legacy community/safety prompt text to the latest default persona.
+ * Ensure API usage debug/cache columns exist.
  */
 function ai_conversation_update_8009() {
-  $config = \Drupal::configFactory()->getEditable('ai_conversation.settings');
-  $current_prompt = (string) $config->get('system_prompt');
-
-  $looks_legacy =
-    stripos($current_prompt, 'community services platform') !== FALSE ||
-    stripos($current_prompt, 'safety intelligence') !== FALSE ||
-    stripos($current_prompt, 'St. Louis Integration') !== FALSE;
-
-  if ($looks_legacy || trim($current_prompt) === '') {
-    $prompt_manager = \Drupal::service('ai_conversation.prompt_manager');
-    $prompt_manager->initializeDefaultPrompt();
-    return t('Migrated system prompt to the latest Forseti Assistance persona.');
-  }
-
-  return t('Skipped prompt migration because a custom non-legacy prompt is already configured.');
-}
-
-/**
- * Fix ai_conversation_api_usage schema: widen prompt_preview and response_preview from
- * varchar(500) to TEXT so full prompts can be stored without truncation errors.
- *
- * Background: the install hook defined these columns as 'type' => 'text' (TEXT) but the
- * initial DB create used varchar(500). This mismatch caused SQLSTATE[22001] errors when
- * prompts exceeded 500 chars. The AIApiService now pre-truncates to 490 chars as a safety
- * guard, but widening the column ensures no future overflow if the limit is ever raised.
- */
-function ai_conversation_update_8010() {
   $schema = \Drupal::database()->schema();
   $table = 'ai_conversation_api_usage';
 
-  foreach (['prompt_preview', 'response_preview'] as $field) {
-    if ($schema->fieldExists($table, $field)) {
-      $schema->changeField($table, $field, $field, [
-        'type' => 'text',
-        'size' => 'normal',
-        'not null' => FALSE,
-        'description' => 'Preview of the prompt/response sent to the AI (truncated for safety).',
-      ]);
-    }
+  if (!$schema->tableExists($table)) {
+    return t('Skipped API usage table update because @table does not exist.', ['@table' => $table]);
   }
 
-  return t('Widened ai_conversation_api_usage.prompt_preview and response_preview from varchar(500) to TEXT.');
+  if (!$schema->fieldExists($table, 'success')) {
+    $schema->addField($table, 'success', [
+      'type' => 'int',
+      'size' => 'tiny',
+      'not null' => FALSE,
+      'default' => 1,
+      'description' => 'Whether the API call succeeded (1) or failed (0)',
+    ]);
+  }
+
+  if (!$schema->fieldExists($table, 'error_message')) {
+    $schema->addField($table, 'error_message', [
+      'type' => 'text',
+      'size' => 'normal',
+      'not null' => FALSE,
+      'description' => 'Error message if API call failed',
+    ]);
+  }
+
+  if (!$schema->fieldExists($table, 'prompt_preview')) {
+    $schema->addField($table, 'prompt_preview', [
+      'type' => 'text',
+      'size' => 'big',
+      'not null' => FALSE,
+      'description' => 'Full prompt sent to AI for debugging',
+    ]);
+  }
+
+  if (!$schema->fieldExists($table, 'response_preview')) {
+    $schema->addField($table, 'response_preview', [
+      'type' => 'text',
+      'size' => 'big',
+      'not null' => FALSE,
+      'description' => 'Full response from AI for debugging/cache',
+    ]);
+  }
+
+  return t('Ensured API usage debug/cache columns exist (success, error_message, prompt_preview, response_preview).');
 }
