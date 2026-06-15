@@ -5,8 +5,18 @@ ai_conversation.settings:
     default_provider:
       type: string
       label: 'Default AI Provider'
-      description: 'Primary GenAI backend (bedrock or ollama)'
-      default: 'bedrock'
+      description: 'Primary GenAI backend (bedrock or deepseek)'
+      default: 'deepseek'
+    deepseek_base_url:
+      type: string
+      label: 'DeepSeek base URL'
+      description: 'DeepSeek-compatible chat completion endpoint base URL (for example https://api.deepseek.com/v1)'
+      default: 'https://api.deepseek.com/v1'
+    deepseek_model:
+      type: string
+      label: 'DeepSeek model ID'
+      description: 'Default model ID for the DeepSeek backend'
+      default: 'deepseek-chat'
     
     enable_user_provider_selection:
       type: boolean

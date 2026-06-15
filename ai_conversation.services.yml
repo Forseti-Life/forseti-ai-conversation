@@ -11,7 +11,7 @@ services:
 
   ai_conversation.ai_api_service:
     class: Drupal\ai_conversation\Service\AIApiService
-    arguments: ['@config.factory', '@logger.factory', '@entity_type.manager', '@ai_conversation.prompt_manager']
+    arguments: ['@config.factory', '@logger.factory', '@entity_type.manager', '@ai_conversation.prompt_manager', '@http_client']
     tags:
       - { name: service }
 

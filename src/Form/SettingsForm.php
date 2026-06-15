@@ -126,7 +126,7 @@ class SettingsForm extends ConfigFormBase {
 
     $form['connection_test']['test_connection'] = [
       '#type' => 'button',
-      '#value' => $this->t('Test AWS Bedrock Connection'),
+      '#value' => $this->t('Test Active Provider Connection'),
       '#ajax' => [
         'callback' => '::testConnection',
         'wrapper' => 'connection-test-result',

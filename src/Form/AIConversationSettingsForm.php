@@ -25,6 +25,9 @@ class AIConversationSettingsForm extends ConfigFormBase {
   const DEFAULT_MAX_TOKENS_BEFORE_SUMMARY = 6000;
   const DEFAULT_REGION = 'us-west-2';
   const DEFAULT_MODEL = 'us.anthropic.claude-sonnet-4-5-20250929-v1:0';
+  const DEFAULT_PROVIDER = 'deepseek';
+  const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
+  const DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat';
   const DEFAULT_SYSTEM_PROMPT_ROWS = 15;
 
   /**
@@ -82,6 +85,9 @@ class AIConversationSettingsForm extends ConfigFormBase {
     // Credential status
     $form['credential_status'] = $this->buildCredentialStatus($config);
 
+    // Provider settings
+    $form['provider_settings'] = $this->buildProviderSettings($config);
+
     // AWS Bedrock settings
     $form['aws_settings'] = $this->buildAwsSettings($config);
 
@@ -111,6 +117,29 @@ class AIConversationSettingsForm extends ConfigFormBase {
    */
   protected function buildCredentialStatus($config): array {
     $status_items = [];
+    $provider = (string) ($config->get('default_provider') ?: self::DEFAULT_PROVIDER);
+
+    $status_items[] = ['#markup' => $this->t('Active default provider: @provider', [
+      '@provider' => strtoupper($provider),
+    ])];
+
+    if ($provider === 'deepseek') {
+      $status_items[] = ['#markup' => $this->t('DeepSeek base URL: @url', [
+        '@url' => (string) ($config->get('deepseek_base_url') ?: self::DEFAULT_DEEPSEEK_BASE_URL),
+      ])];
+      $status_items[] = ['#markup' => $this->t('DeepSeek API key from environment: @status', [
+        '@status' => getenv('DEEPSEEK_API_KEY') ? $this->t('available') : $this->t('missing'),
+      ])];
+
+      return [
+        '#type' => 'item',
+        '#title' => $this->t('Current Status'),
+        '#theme' => 'item_list',
+        '#list_type' => 'ul',
+        '#items' => $status_items,
+        '#wrapper_attributes' => ['class' => ['messages', 'messages--status']],
+      ];
+    }
 
     // Check AWS credentials
     if (!empty($config->get('aws_access_key_id'))) {
@@ -142,6 +171,52 @@ class AIConversationSettingsForm extends ConfigFormBase {
       '#items' => $status_items,
       '#wrapper_attributes' => ['class' => ['messages', 'messages--status']],
     ];
+  }
+
+  /**
+   * Build provider settings fieldset.
+   *
+   * @param \Drupal\Core\Config\ImmutableConfig $config
+   *   The configuration object.
+   *
+   * @return array
+   *   Form element array.
+   */
+  protected function buildProviderSettings($config): array {
+    $fieldset = [
+      '#type' => 'fieldset',
+      '#title' => $this->t('AI Provider Settings'),
+      '#description' => $this->t('Choose which backend powers shared AI workloads such as JobHunter resume parsing and tailoring.'),
+    ];
+
+    $fieldset['default_provider'] = [
+      '#type' => 'select',
+      '#title' => $this->t('Default Provider'),
+      '#default_value' => $config->get('default_provider') ?: self::DEFAULT_PROVIDER,
+      '#options' => [
+        'deepseek' => $this->t('DeepSeek'),
+        'bedrock' => $this->t('AWS Bedrock'),
+      ],
+      '#required' => TRUE,
+    ];
+
+    $fieldset['deepseek_base_url'] = [
+      '#type' => 'url',
+      '#title' => $this->t('DeepSeek Base URL'),
+      '#default_value' => $config->get('deepseek_base_url') ?: self::DEFAULT_DEEPSEEK_BASE_URL,
+      '#description' => $this->t('Base URL for the DeepSeek-compatible chat completions API.'),
+      '#required' => TRUE,
+    ];
+
+    $fieldset['deepseek_model'] = [
+      '#type' => 'textfield',
+      '#title' => $this->t('DeepSeek Model ID'),
+      '#default_value' => $config->get('deepseek_model') ?: self::DEFAULT_DEEPSEEK_MODEL,
+      '#description' => $this->t('Default DeepSeek model ID used for shared AI requests.'),
+      '#required' => TRUE,
+    ];
+
+    return $fieldset;
   }
 
   /**
@@ -355,7 +430,7 @@ class AIConversationSettingsForm extends ConfigFormBase {
       '#open' => FALSE,
       'test_connection' => [
         '#type' => 'button',
-        '#value' => $this->t('Test AWS Bedrock Connection'),
+        '#value' => $this->t('Test Active Provider Connection'),
         '#ajax' => [
           'callback' => '::testConnection',
           'wrapper' => 'connection-test-result',
@@ -504,7 +579,7 @@ class AIConversationSettingsForm extends ConfigFormBase {
   }
 
   /**
-   * Test the AWS Bedrock connection.
+   * Test the active provider connection.
    *
    * @param array $form
    *   The form array.
@@ -552,6 +627,17 @@ class AIConversationSettingsForm extends ConfigFormBase {
   public function validateForm(array &$form, FormStateInterface $form_state): void {
     parent::validateForm($form, $form_state);
 
+    $default_provider = (string) $form_state->getValue('default_provider');
+    if ($default_provider === 'deepseek') {
+      if (empty(getenv('DEEPSEEK_API_KEY'))) {
+        $form_state->setErrorByName(
+          'default_provider',
+          $this->t('DEEPSEEK_API_KEY must be available in the environment when DeepSeek is the default provider.')
+        );
+      }
+      return;
+    }
+
     // Validate AWS credentials
     $access_key = $form_state->getValue('aws_access_key_id');
     $secret_key = $form_state->getValue('aws_secret_access_key');
@@ -581,6 +667,10 @@ class AIConversationSettingsForm extends ConfigFormBase {
    */
   public function submitForm(array &$form, FormStateInterface $form_state): void {
     $config = $this->config('ai_conversation.settings');
+
+    $config->set('default_provider', $form_state->getValue('default_provider'));
+    $config->set('deepseek_base_url', $form_state->getValue('deepseek_base_url'));
+    $config->set('deepseek_model', $form_state->getValue('deepseek_model'));
 
     // AWS credentials
     $access_key = $form_state->getValue('aws_access_key_id');

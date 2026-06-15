@@ -8,9 +8,10 @@ use Drupal\node\NodeInterface;
 use Drupal\node\Entity\Node;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\ai_conversation\Traits\ConfigurableLoggingTrait;
+use GuzzleHttp\ClientInterface;
 
 /**
- * Service for AI API communication using AWS Bedrock with rolling conversation summary.
+ * Service for AI API communication with provider routing and rolling summaries.
  */
 class AIApiService {
 
@@ -45,6 +46,13 @@ class AIApiService {
   protected $promptManager;
 
   /**
+   * The HTTP client.
+   *
+   * @var \GuzzleHttp\ClientInterface
+   */
+  protected $httpClient;
+
+  /**
    * Maximum number of recent messages to keep (configurable).
    *
    * @var int
@@ -68,10 +76,11 @@ class AIApiService {
   /**
    * Constructs a new AIApiService object.
    */
-  public function __construct(ConfigFactoryInterface $config_factory, LoggerChannelFactoryInterface $logger_factory, EntityTypeManagerInterface $entity_type_manager, PromptManager $prompt_manager = NULL) {
+  public function __construct(ConfigFactoryInterface $config_factory, LoggerChannelFactoryInterface $logger_factory, EntityTypeManagerInterface $entity_type_manager, PromptManager $prompt_manager = NULL, ClientInterface $http_client = NULL) {
     $this->configFactory = $config_factory;
     $this->logger = $logger_factory->get('ai_conversation');
     $this->entityTypeManager = $entity_type_manager;
+    $this->httpClient = $http_client ?: \Drupal::httpClient();
     
     // Inject PromptManager or create one if not provided (for backwards compatibility)
     if ($prompt_manager) {
@@ -102,6 +111,39 @@ class AIApiService {
   }
 
   /**
+   * Resolve the configured default provider.
+   */
+  private function getDefaultProvider(): string {
+    $provider = strtolower(trim((string) ($this->configFactory->get('ai_conversation.settings')->get('default_provider') ?? 'deepseek')));
+    return in_array($provider, ['bedrock', 'deepseek'], TRUE) ? $provider : 'deepseek';
+  }
+
+  /**
+   * Resolve the configured DeepSeek base URL.
+   */
+  private function getDeepSeekBaseUrl(): string {
+    $configured = trim((string) ($this->configFactory->get('ai_conversation.settings')->get('deepseek_base_url') ?? ''));
+    $from_env = trim((string) (getenv('DEEPSEEK_BASE_URL') ?: ''));
+    $base_url = $configured !== '' ? $configured : ($from_env !== '' ? $from_env : 'https://api.deepseek.com/v1');
+    return rtrim($base_url, '/');
+  }
+
+  /**
+   * Resolve the configured DeepSeek model override.
+   */
+  private function getDeepSeekModel(?string $override = NULL): string {
+    $override = trim((string) ($override ?? ''));
+    if ($override !== '') {
+      return $override;
+    }
+    $configured = trim((string) ($this->configFactory->get('ai_conversation.settings')->get('deepseek_model') ?? ''));
+    if ($configured !== '') {
+      return $configured;
+    }
+    return trim((string) (getenv('DEEPSEEK_MODEL') ?: 'deepseek-chat'));
+  }
+
+  /**
    * Builds a configured Bedrock runtime client using system config only.
    */
   private function buildBedrockClient(): \Aws\BedrockRuntime\BedrockRuntimeClient {
@@ -119,6 +161,144 @@ class AIApiService {
   }
 
   /**
+   * Invoke a single-turn completion using the active provider.
+   */
+  private function invokePrompt(string $prompt, int $max_tokens, array $options = []): array {
+    $provider = strtolower(trim((string) ($options['provider'] ?? $this->getDefaultProvider())));
+    if ($provider === 'deepseek') {
+      return $this->invokeDeepSeekPrompt($prompt, $max_tokens, $options);
+    }
+    return $this->invokeBedrockPrompt($prompt, $max_tokens, $options);
+  }
+
+  /**
+   * Invoke the Bedrock provider and normalize the response.
+   */
+  private function invokeBedrockPrompt(string $prompt, int $max_tokens, array $options = []): array {
+    $bedrock = $this->buildBedrockClient();
+    $model_candidates = !empty($options['model_id'])
+      ? [trim((string) $options['model_id'])]
+      : $this->getModelFallbacks();
+
+    $request_body = [
+      'anthropic_version' => 'bedrock-2023-05-31',
+      'max_tokens' => $max_tokens,
+      'messages' => [
+        [
+          'role' => 'user',
+          'content' => $prompt,
+        ],
+      ],
+    ];
+
+    if (!empty($options['system_prompt'])) {
+      $request_body['system'] = $options['system_prompt'];
+    }
+
+    $start_time = microtime(TRUE);
+    $last_exception = NULL;
+    $response = NULL;
+    $resolved_model = $model_candidates[0];
+    foreach ($model_candidates as $candidate_model) {
+      try {
+        $response = $bedrock->invokeModel([
+          'modelId' => $candidate_model,
+          'body' => json_encode($request_body),
+        ]);
+        $resolved_model = $candidate_model;
+        $last_exception = NULL;
+        break;
+      }
+      catch (\Aws\Exception\AwsException $e) {
+        $this->logError('Model @model failed (@code), trying next. Error: @msg', [
+          '@model' => $candidate_model,
+          '@code' => $e->getAwsErrorCode(),
+          '@msg' => $e->getMessage(),
+        ]);
+        $last_exception = $e;
+      }
+    }
+
+    if ($last_exception !== NULL) {
+      throw $last_exception;
+    }
+
+    $duration_ms = (int) ((microtime(TRUE) - $start_time) * 1000);
+    $result = json_decode($response['body']->getContents(), TRUE);
+    $text = isset($result['content'][0]['text']) ? (string) $result['content'][0]['text'] : '';
+    if ($text === '') {
+      throw new \RuntimeException('Unexpected Bedrock API response format');
+    }
+
+    return [
+      'provider' => 'bedrock',
+      'model_id' => $resolved_model,
+      'response' => $text,
+      'stop_reason' => (string) ($result['stop_reason'] ?? 'unknown'),
+      'duration_ms' => $duration_ms,
+    ];
+  }
+
+  /**
+   * Invoke the DeepSeek provider and normalize the response.
+   */
+  private function invokeDeepSeekPrompt(string $prompt, int $max_tokens, array $options = []): array {
+    $api_key = trim((string) (getenv('DEEPSEEK_API_KEY') ?: ''));
+    if ($api_key === '') {
+      throw new \RuntimeException('DeepSeek credentials are missing (DEEPSEEK_API_KEY).');
+    }
+
+    $resolved_model = $this->getDeepSeekModel($options['model_id'] ?? NULL);
+    $messages = [];
+    $system_prompt = trim((string) ($options['system_prompt'] ?? ''));
+    if ($system_prompt !== '') {
+      $messages[] = [
+        'role' => 'system',
+        'content' => $system_prompt,
+      ];
+    }
+    $messages[] = [
+      'role' => 'user',
+      'content' => $prompt,
+    ];
+
+    $payload = [
+      'messages' => $messages,
+      'temperature' => 0,
+      'max_tokens' => $max_tokens,
+      'stream' => FALSE,
+    ];
+    if ($resolved_model !== '') {
+      $payload['model'] = $resolved_model;
+    }
+
+    $start_time = microtime(TRUE);
+    $response = $this->httpClient->request('POST', $this->getDeepSeekBaseUrl() . '/chat/completions', [
+      'headers' => [
+        'Content-Type' => 'application/json',
+        'Accept' => 'application/json',
+        'Authorization' => 'Bearer ' . $api_key,
+      ],
+      'json' => $payload,
+      'timeout' => 120,
+    ]);
+    $duration_ms = (int) ((microtime(TRUE) - $start_time) * 1000);
+    $result = json_decode((string) $response->getBody(), TRUE);
+    $text = trim((string) (($result['choices'][0]['message']['content'] ?? '')));
+    if ($text === '') {
+      throw new \RuntimeException('Unexpected DeepSeek response format');
+    }
+
+    return [
+      'provider' => 'deepseek',
+      'model_id' => (string) ($result['model'] ?? ($resolved_model !== '' ? $resolved_model : 'deepseek-chat')),
+      'response' => $text,
+      'stop_reason' => (string) ($result['choices'][0]['finish_reason'] ?? 'unknown'),
+      'duration_ms' => $duration_ms,
+    ];
+  }
+
+  /**
    * Send a message to the AI model with rolling summary management.
    */
   public function sendMessage(NodeInterface $conversation, string $message) {
@@ -127,9 +307,8 @@ class AIApiService {
       $this->checkAndUpdateSummary($conversation);
 
       $config = $this->configFactory->get('ai_conversation.settings');
-      $bedrock = $this->buildBedrockClient();
-      $models_to_try = $this->getModelFallbacks();
-      $model = $models_to_try[0];
+      $provider = $this->getDefaultProvider();
+      $model = $provider === 'bedrock' ? $this->getModelFallbacks()[0] : $this->getDeepSeekModel();
 
       // Build the optimized conversation context (summary + recent messages).
       $context = $this->buildOptimizedContext($conversation, $message);
@@ -149,106 +328,40 @@ class AIApiService {
         '@preview' => substr($system_prompt ?? 'EMPTY', 0, 100),
       ]);
 
-      // Build the request body.
-      $request_body = [
-        'anthropic_version' => 'bedrock-2023-05-31',
-        'max_tokens' => $max_tokens,
-        'messages' => [
-          [
-            'role' => 'user',
-            'content' => $context
-          ]
-        ]
-      ];
+      $start_time = microtime(TRUE);
+      $result = $this->invokePrompt($context, $max_tokens, [
+        'provider' => $provider,
+        'system_prompt' => $system_prompt,
+      ]);
+      $model = $result['model_id'];
+      $duration_ms = $result['duration_ms'];
+      $ai_response = $result['response'];
+      $stop_reason = $result['stop_reason'];
 
-      // Add system prompt if configured.
-      if (!empty($system_prompt)) {
-        $request_body['system'] = $system_prompt;
-        $this->logInfo('System prompt added to request body');
-      } else {
-        $this->logInfo('No system prompt found in configuration');
-      }
+      // Estimate output tokens and update total.
+      $output_tokens = $this->estimateTokens($ai_response);
+      $this->updateTokenCount($conversation, $input_tokens + $output_tokens);
 
-      $start_time = microtime(true);
-
-      // Try models in fallback order.
-      $last_exception = NULL;
-      $response = NULL;
-      foreach ($models_to_try as $candidate_model) {
-        try {
-          $response = $bedrock->invokeModel([
-            'modelId' => $candidate_model,
-            'body' => json_encode($request_body),
-          ]);
-          $model = $candidate_model;
-          $last_exception = NULL;
-          break;
-        } catch (\Aws\Exception\AwsException $e) {
-          $this->logError('Model @model failed (@code), trying next. Error: @msg', [
-            '@model' => $candidate_model,
-            '@code' => $e->getAwsErrorCode(),
-            '@msg' => $e->getMessage(),
-          ]);
-          $last_exception = $e;
-        }
-      }
-      if ($last_exception !== NULL) {
-        throw $last_exception;
-      }
-
-      $duration_ms = (int)((microtime(true) - $start_time) * 1000);
-
-      $result = json_decode($response['body']->getContents(), true);
-      
-      if (isset($result['content'][0]['text'])) {
-        $ai_response = $result['content'][0]['text'];
-        $stop_reason = $result['stop_reason'] ?? 'unknown';
-        
-        // Estimate output tokens and update total.
-        $output_tokens = $this->estimateTokens($ai_response);
-        $this->updateTokenCount($conversation, $input_tokens + $output_tokens);
-        
-        // Track API usage (success case)
-        $this->trackApiUsage([
-          'module' => 'ai_conversation',
-          'operation' => 'chat_message',
-          'model_id' => $model,
-          'input_tokens' => $input_tokens,
-          'output_tokens' => $output_tokens,
-          'stop_reason' => $stop_reason,
-          'duration_ms' => $duration_ms,
-          'context_data' => [
-            'conversation_id' => $conversation->id(),
-            'conversation_title' => $conversation->getTitle(),
-          ],
-          'success' => TRUE,
-          'prompt' => $context,
-          'response' => $ai_response,
-        ]);
-        
-        return $ai_response;
-      }
-      
-      // Track failure - unexpected response format
+      // Track API usage (success case)
       $this->trackApiUsage([
         'module' => 'ai_conversation',
         'operation' => 'chat_message',
         'model_id' => $model,
         'input_tokens' => $input_tokens,
-        'output_tokens' => 0,
-        'stop_reason' => 'error',
+        'output_tokens' => $output_tokens,
+        'stop_reason' => $stop_reason,
         'duration_ms' => $duration_ms,
         'context_data' => [
           'conversation_id' => $conversation->id(),
           'conversation_title' => $conversation->getTitle(),
+          'provider' => $provider,
         ],
-        'success' => FALSE,
-        'error_message' => 'Unexpected API response format',
+        'success' => TRUE,
         'prompt' => $context,
+        'response' => $ai_response,
       ]);
-      
-      $this->logError('Unexpected API response format: @response', ['@response' => print_r($result, TRUE)]);
-      throw new \Exception('Unexpected API response format');
+
+      return $ai_response;
       
     } catch (\Exception $e) {
       // Track failure - exception
@@ -263,6 +376,7 @@ class AIApiService {
         'context_data' => [
           'conversation_id' => $conversation->id(),
           'conversation_title' => $conversation->getTitle(),
+          'provider' => $provider ?? $this->getDefaultProvider(),
         ],
         'success' => FALSE,
         'error_message' => $e->getMessage(),
@@ -430,7 +544,7 @@ class AIApiService {
    *   Array with keys:
    *   - module: Module making the call (e.g., 'ai_conversation', 'job_hunter')
    *   - operation: Operation type (e.g., 'chat_message', 'resume_parsing')
-   *   - model_id: AWS Bedrock model identifier
+   *   - model_id: Provider-specific model identifier
    *   - input_tokens: Estimated input tokens
    *   - output_tokens: Estimated output tokens
    *   - stop_reason: API stop reason (end_turn, max_tokens, etc.)
@@ -453,6 +567,9 @@ class AIApiService {
         // Dynamic pricing based on actual model
         $input_cost = ($params['input_tokens'] ?? 0) * $pricing['input'] / 1000000;
         $output_cost = ($params['output_tokens'] ?? 0) * $pricing['output'] / 1000000;
+      } elseif (str_starts_with($model_id, 'deepseek')) {
+        $input_cost = 0;
+        $output_cost = 0;
       } else {
         // Fallback to Claude 3.5 Sonnet pricing if model unknown
         $input_cost = ($params['input_tokens'] ?? 0) * 3.00 / 1000000;
@@ -524,7 +641,7 @@ class AIApiService {
   }
 
   /**
-   * Invoke AWS Bedrock model directly with tracking and caching.
+   * Invoke the configured provider directly with tracking and caching.
    * 
    * For use by queue workers and batch operations that don't use conversation nodes.
    * Automatically checks for cached successful responses before making new API calls.
@@ -578,102 +695,66 @@ class AIApiService {
       }
       
       // No cache hit - proceed with API call
-      $bedrock = $this->buildBedrockClient();
-      $model_id = $options['model_id'] ?? $this->getModelFallbacks()[0];
+      $provider = strtolower(trim((string) ($options['provider'] ?? $this->getDefaultProvider())));
+      $model_id = $options['model_id']
+        ?? ($provider === 'bedrock' ? $this->getModelFallbacks()[0] : $this->getDeepSeekModel());
       $max_tokens = $options['max_tokens'] ?? 8000;
-      
-      $request_body = [
-        'anthropic_version' => 'bedrock-2023-05-31',
-        'max_tokens' => $max_tokens,
-        'messages' => [
-          [
-            'role' => 'user',
-            'content' => $prompt,
-          ],
-        ],
-      ];
-
-      if (!empty($options['system_prompt'])) {
-        $request_body['system'] = $options['system_prompt'];
-      }
 
       $start_time = microtime(TRUE);
-
-      $response = $bedrock->invokeModel([
-        'modelId' => $model_id,
-        'body' => json_encode($request_body),
+      $result = $this->invokePrompt($prompt, $max_tokens, [
+        'provider' => $provider,
+        'model_id' => $model_id,
+        'system_prompt' => $options['system_prompt'] ?? NULL,
       ]);
+      $duration_ms = $result['duration_ms'];
+      $model_id = $result['model_id'];
+      $ai_response = $result['response'];
+      $stop_reason = $result['stop_reason'];
 
-      $duration_ms = (int)((microtime(TRUE) - $start_time) * 1000);
-      $result = json_decode($response['body']->getContents(), TRUE);
-      
-      if (isset($result['content'][0]['text'])) {
-        $ai_response = $result['content'][0]['text'];
-        $stop_reason = $result['stop_reason'] ?? 'unknown';
-        
-        // Estimate tokens
-        $input_tokens = $this->estimateTokens($prompt);
-        $output_tokens = $this->estimateTokens($ai_response);
-        
-        // Add max_tokens to context_data for debugging
-        $context_data_with_config = $context_data + ['max_tokens' => $max_tokens, 'model_id' => $model_id];
-        
-        // Track usage (success case)
-        $this->trackApiUsage([
-          'module' => $module,
-          'operation' => $operation,
-          'model_id' => $model_id,
-          'input_tokens' => $input_tokens,
-          'output_tokens' => $output_tokens,
-          'stop_reason' => $stop_reason,
-          'duration_ms' => $duration_ms,
-          'context_data' => $context_data_with_config,
-          'success' => TRUE,
-          'prompt' => $prompt,
-          'response' => $ai_response,
-        ]);
-        
-        return [
-          'success' => TRUE,
-          'response' => $ai_response,
-          'stop_reason' => $stop_reason,
-          'input_tokens' => $input_tokens,
-          'output_tokens' => $output_tokens,
-          'cached' => FALSE,
-        ];
-      }
-      
-      // Track failure - unexpected response format
-      $context_data_with_config = $context_data + ['max_tokens' => $max_tokens, 'model_id' => $model_id];
+      // Estimate tokens
+      $input_tokens = $this->estimateTokens($prompt);
+      $output_tokens = $this->estimateTokens($ai_response);
+
+      // Add max_tokens to context_data for debugging
+      $context_data_with_config = $context_data + ['max_tokens' => $max_tokens, 'model_id' => $model_id, 'provider' => $provider];
+
+      // Track usage (success case)
       $this->trackApiUsage([
         'module' => $module,
         'operation' => $operation,
         'model_id' => $model_id,
-        'input_tokens' => 0,
-        'output_tokens' => 0,
-        'stop_reason' => 'error',
-        'duration_ms' => $duration_ms ?? 0,
+        'input_tokens' => $input_tokens,
+        'output_tokens' => $output_tokens,
+        'stop_reason' => $stop_reason,
+        'duration_ms' => $duration_ms,
         'context_data' => $context_data_with_config,
-        'success' => FALSE,
-        'error_message' => 'Unexpected API response format',
+        'success' => TRUE,
         'prompt' => $prompt,
+        'response' => $ai_response,
       ]);
-      
+
       return [
-        'success' => FALSE,
-        'error' => 'Unexpected API response format',
+        'success' => TRUE,
+        'response' => $ai_response,
+        'stop_reason' => $stop_reason,
+        'input_tokens' => $input_tokens,
+        'output_tokens' => $output_tokens,
+        'cached' => FALSE,
       ];
       
     } catch (\Exception $e) {
-      $this->logError('AWS Bedrock invocation failed: @message', ['@message' => $e->getMessage()]);
+      $this->logError('Direct AI invocation failed: @message', ['@message' => $e->getMessage()]);
       
       // Track failure - exception
+      $provider = strtolower(trim((string) ($options['provider'] ?? $this->getDefaultProvider())));
       $max_tokens_for_error = $options['max_tokens'] ?? 8000;
-      $context_data_with_config = $context_data + ['max_tokens' => $max_tokens_for_error, 'model_id' => $options['model_id'] ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0'];
+      $fallback_model = $options['model_id']
+        ?? ($provider === 'bedrock' ? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0' : $this->getDeepSeekModel());
+      $context_data_with_config = $context_data + ['max_tokens' => $max_tokens_for_error, 'model_id' => $fallback_model, 'provider' => $provider];
       $this->trackApiUsage([
         'module' => $module,
         'operation' => $operation,
-        'model_id' => $options['model_id'] ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+        'model_id' => $fallback_model,
         'input_tokens' => 0,
         'output_tokens' => 0,
         'stop_reason' => 'error',
@@ -897,7 +978,7 @@ class AIApiService {
       // Build context for summary generation.
       $summary_context = $this->buildSummaryContext($conversation, $messages_to_summarize);
 
-      // Generate summary using Claude.
+      // Generate summary using the active provider.
       $summary = $this->generateSummary($summary_context);
 
       // Update the conversation with the new summary.
@@ -926,34 +1007,10 @@ class AIApiService {
    */
   private function generateSummary(string $context) {
     try {
-      $bedrock = $this->buildBedrockClient();
-      $models_to_try = $this->getModelFallbacks();
-      $request_body = json_encode([
-        'anthropic_version' => 'bedrock-2023-05-31',
-        'max_tokens' => 20000,
-        'messages' => [['role' => 'user', 'content' => $context]],
+      $result = $this->invokePrompt($context, 20000, [
+        'provider' => $this->getDefaultProvider(),
       ]);
-
-      $last_exception = NULL;
-      $result = NULL;
-      foreach ($models_to_try as $candidate_model) {
-        try {
-          $response = $bedrock->invokeModel(['modelId' => $candidate_model, 'body' => $request_body]);
-          $result = json_decode($response['body']->getContents(), true);
-          $last_exception = NULL;
-          break;
-        } catch (\Aws\Exception\AwsException $e) {
-          $last_exception = $e;
-        }
-      }
-      if ($last_exception !== NULL) {
-        throw $last_exception;
-      }
-
-      if (isset($result['content'][0]['text'])) {
-        return $result['content'][0]['text'];
-      }
-      throw new \Exception('Unexpected API response format');
+      return $result['response'];
 
     } catch (\Exception $e) {
       $this->logError('Error generating summary: @message', ['@message' => $e->getMessage()]);
@@ -1054,34 +1111,18 @@ class AIApiService {
    */
   public function testConnection() {
     try {
-      $bedrock = $this->buildBedrockClient();
-      $models_to_try = $this->getModelFallbacks();
-      $model = $models_to_try[0];
-
-      $response = $bedrock->invokeModel([
-        'modelId' => $model,
-        'body' => json_encode([
-          'anthropic_version' => 'bedrock-2023-05-31',
-          'max_tokens' => 256,
-          'messages' => [
-            [
-              'role' => 'user',
-              'content' => 'Hello'
-            ]
-          ]
-        ])
+      $provider = $this->getDefaultProvider();
+      $result = $this->invokePrompt('Hello', 256, [
+        'provider' => $provider,
       ]);
-
-      $result = json_decode($response['body']->getContents(), true);
-      
-      if (isset($result['content'][0]['text'])) {
-        return ['success' => TRUE, 'message' => 'AWS Bedrock connection successful', 'model' => $model];
-      } else {
-        return ['success' => FALSE, 'message' => 'Unexpected API response'];
-      }
+      return [
+        'success' => TRUE,
+        'message' => strtoupper($provider) . ' connection successful',
+        'model' => $result['model_id'],
+      ];
 
     } catch (\Exception $e) {
-      return ['success' => FALSE, 'message' => 'AWS Bedrock connection failed: ' . $e->getMessage()];
+      return ['success' => FALSE, 'message' => strtoupper($this->getDefaultProvider()) . ' connection failed: ' . $e->getMessage()];
     }
   }
 
