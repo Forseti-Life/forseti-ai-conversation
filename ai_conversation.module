@@ -101,6 +101,25 @@ function ai_conversation_preprocess_ai_conversation_chat(&$variables) {
 }
 
 /**
+ * Implements hook_entity_view().
+ *
+ * Keep this hook callable defined so hook registry entries cannot hard-fail
+ * node rendering when stale callback indices reference ai_conversation.
+ */
+function ai_conversation_entity_view(array &$build, $entity, $display, $view_mode) {
+  // No entity-view mutations are currently required.
+}
+
+/**
+ * Implements hook_template_entity_operation().
+ *
+ * Returns no extra operations for template entities.
+ */
+function ai_conversation_template_entity_operation($entity): array {
+  return [];
+}
+
+/**
  * Implements hook_form_user_form_alter() — AC-2: optional user provider preference.
  *
  * ONLY active when enable_user_provider_selection is TRUE in config.
