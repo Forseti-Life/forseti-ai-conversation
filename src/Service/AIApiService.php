@@ -140,7 +140,7 @@ class AIApiService {
     if ($configured !== '') {
       return $configured;
     }
-    return trim((string) (getenv('DEEPSEEK_MODEL') ?: 'deepseek-chat'));
+    return trim((string) (getenv('DEEPSEEK_MODEL') ?: 'deepseek-v4-flash'));
   }
 
   /**
@@ -291,7 +291,7 @@ class AIApiService {
 
     return [
       'provider' => 'deepseek',
-      'model_id' => (string) ($result['model'] ?? ($resolved_model !== '' ? $resolved_model : 'deepseek-chat')),
+      'model_id' => (string) ($result['model'] ?? ($resolved_model !== '' ? $resolved_model : 'deepseek-v4-flash')),
       'response' => $text,
       'stop_reason' => (string) ($result['choices'][0]['finish_reason'] ?? 'unknown'),
       'duration_ms' => $duration_ms,

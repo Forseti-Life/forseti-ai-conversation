@@ -27,7 +27,7 @@ class AIConversationSettingsForm extends ConfigFormBase {
   const DEFAULT_MODEL = 'us.anthropic.claude-sonnet-4-5-20250929-v1:0';
   const DEFAULT_PROVIDER = 'deepseek';
   const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
-  const DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat';
+  const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
   const DEFAULT_SYSTEM_PROMPT_ROWS = 15;
 
   /**

@@ -16,7 +16,7 @@ ai_conversation.settings:
       type: string
       label: 'DeepSeek model ID'
       description: 'Default model ID for the DeepSeek backend'
-      default: 'deepseek-chat'
+      default: 'deepseek-v4-flash'
     
     enable_user_provider_selection:
       type: boolean
