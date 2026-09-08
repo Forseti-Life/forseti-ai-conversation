@@ -2,6 +2,40 @@
 
 declare(strict_types=1);
 
+if (!class_exists('Drupal', FALSE)) {
+  final class Drupal {
+    public static ?FakeConnection $database = NULL;
+
+    public static function config(string $name): object {
+      return new class {
+        public function get(string $key) {
+          return NULL;
+        }
+      };
+    }
+
+    public static function database(): FakeConnection {
+      return self::$database ?? new FakeConnection(NULL);
+    }
+
+    public static function time(): object {
+      return new class {
+        public function getRequestTime(): int {
+          return 1;
+        }
+      };
+    }
+
+    public static function currentUser(): object {
+      return new class {
+        public function id(): int {
+          return 0;
+        }
+      };
+    }
+  }
+}
+
 require_once __DIR__ . '/../src/Traits/ConfigurableLoggingTrait.php';
 require_once __DIR__ . '/../src/Service/AIApiService.php';
 
@@ -53,6 +87,74 @@ final class FakeHttpClient {
       throw new RuntimeException('No fake response queued.');
     }
     return array_shift($this->responses);
+  }
+}
+
+final class FakeSchema {
+  public function fieldExists(string $table, string $field): bool {
+    return FALSE;
+  }
+}
+
+final class FakeInsert {
+  public function fields(array $fields): self {
+    return $this;
+  }
+
+  public function execute(): int {
+    return 1;
+  }
+}
+
+final class FakeQueryResult {
+  public function __construct(private ?array $row) {}
+
+  public function fetchAssoc(): ?array {
+    return $this->row;
+  }
+}
+
+final class FakeQuery {
+  public function __construct(private ?array $row) {}
+
+  public function fields(string $alias, array $fields): self {
+    return $this;
+  }
+
+  public function condition(string $field, mixed $value): self {
+    return $this;
+  }
+
+  public function orderBy(string $field, string $direction): self {
+    return $this;
+  }
+
+  public function range(int $start, int $length): self {
+    return $this;
+  }
+
+  public function where(string $snippet, array $args): self {
+    return $this;
+  }
+
+  public function execute(): FakeQueryResult {
+    return new FakeQueryResult($this->row);
+  }
+}
+
+final class FakeConnection {
+  public function __construct(private ?array $cachedRow) {}
+
+  public function select(string $table, string $alias): FakeQuery {
+    return new FakeQuery($this->cachedRow);
+  }
+
+  public function insert(string $table): FakeInsert {
+    return new FakeInsert();
+  }
+
+  public function schema(): FakeSchema {
+    return new FakeSchema();
   }
 }
 
@@ -112,6 +214,34 @@ assert_true($result['reasoning_tokens'] === 0, 'reasoning_tokens was not normali
 $client = new FakeHttpClient(new FakeResponse($successBody));
 invoke_deepseek(make_service($client), ['thinking' => 'enabled']);
 assert_true($client->lastRequest[2]['json']['thinking'] === ['type' => 'enabled'], 'thinking=enabled was not added to the DeepSeek payload.');
+
+Drupal::$database = new FakeConnection(NULL);
+$direct = make_service(new FakeHttpClient(new FakeResponse($successBody)))
+  ->invokeModelDirect('Generate structured JSON.', 'test_module', 'live_op', [], [
+    'provider' => 'deepseek',
+    'model_id' => 'deepseek-v4-flash',
+    'skip_cache' => TRUE,
+  ]);
+assert_true($direct['model_id'] === 'deepseek-v4-flash', 'Live invokeModelDirect result omitted model_id.');
+assert_true($direct['provider'] === 'deepseek', 'Live invokeModelDirect result omitted provider.');
+
+Drupal::$database = new FakeConnection([
+  'response_preview' => '{"cached":true}',
+  'stop_reason' => 'stop',
+  'timestamp' => 1,
+  'model_id' => 'stored-deepseek-model',
+  'input_tokens' => 3,
+  'output_tokens' => 4,
+  'context_data' => json_encode(['provider' => 'deepseek'], JSON_THROW_ON_ERROR),
+]);
+$cached = make_service(new FakeHttpClient())
+  ->invokeModelDirect('Generate structured JSON.', 'test_module', 'cached_op', [], [
+    'provider' => 'deepseek',
+    'model_id' => 'resolved-deepseek-model',
+  ]);
+assert_true($cached['cached'] === TRUE, 'Cached invokeModelDirect result did not use cache.');
+assert_true($cached['model_id'] === 'stored-deepseek-model', 'Cached invokeModelDirect result did not use cached model_id.');
+assert_true($cached['provider'] === 'deepseek', 'Cached invokeModelDirect result omitted provider.');
 
 $emptyBody = json_encode([
   'model' => 'deepseek-v4-flash',

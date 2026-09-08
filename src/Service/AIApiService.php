@@ -733,6 +733,8 @@ class AIApiService {
    * @return array
    *   Response array with keys:
    *   - success: bool
+   *   - model_id: string
+   *   - provider: string
    *   - response: string (AI response text)
    *   - stop_reason: string
    *   - finish_reason: string
@@ -770,6 +772,8 @@ class AIApiService {
           
           return [
             'success' => TRUE,
+            'model_id' => !empty($cached['model_id']) ? $cached['model_id'] : $model_id,
+            'provider' => !empty($cached['provider']) ? $cached['provider'] : $provider,
             'response' => $cached['response'],
             'stop_reason' => $cached['stop_reason'],
             'finish_reason' => $cached['stop_reason'],
@@ -824,6 +828,8 @@ class AIApiService {
 
       return [
         'success' => TRUE,
+        'model_id' => $model_id,
+        'provider' => $provider,
         'response' => $ai_response,
         'stop_reason' => $stop_reason,
         'finish_reason' => $finish_reason,
@@ -889,7 +895,7 @@ class AIApiService {
     
     // Build WHERE clauses for context_data matching
     $query = $connection->select('ai_conversation_api_usage', 'u')
-      ->fields('u', ['response_preview', 'stop_reason', 'timestamp', 'input_tokens', 'output_tokens'])
+      ->fields('u', ['response_preview', 'stop_reason', 'timestamp', 'model_id', 'input_tokens', 'output_tokens', 'context_data'])
       ->condition('module', $module)
       ->condition('operation', $operation)
       ->condition('success', 1)
@@ -905,7 +911,10 @@ class AIApiService {
     $result = $query->execute()->fetchAssoc();
     
     if ($result && !empty($result['response_preview'])) {
+      $stored_context = json_decode((string) ($result['context_data'] ?? ''), TRUE);
       return [
+        'model_id' => $result['model_id'] ?? NULL,
+        'provider' => is_array($stored_context) ? ($stored_context['provider'] ?? NULL) : NULL,
         'response' => $result['response_preview'],
         'stop_reason' => $result['stop_reason'],
         'timestamp' => $result['timestamp'],
