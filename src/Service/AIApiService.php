@@ -162,6 +162,15 @@ class AIApiService {
 
   /**
    * Invoke a single-turn completion using the active provider.
+   *
+   * Supported options:
+   * - provider: Provider override ('deepseek' or 'bedrock').
+   * - model_id: Provider-specific model override.
+   * - system_prompt: Optional system prompt.
+   * - thinking: Optional reasoning control. Supported values are 'enabled'
+   *   and 'disabled'. DeepSeek maps either value to {"thinking":{"type":value}}.
+   *   Bedrock maps 'enabled' to Anthropic extended thinking and treats
+   *   'disabled' as the unchanged default provider behavior.
    */
   private function invokePrompt(string $prompt, int $max_tokens, array $options = []): array {
     $provider = strtolower(trim((string) ($options['provider'] ?? $this->getDefaultProvider())));
@@ -193,6 +202,16 @@ class AIApiService {
 
     if (!empty($options['system_prompt'])) {
       $request_body['system'] = $options['system_prompt'];
+    }
+    $thinking = $this->normalizeThinkingOption($options);
+    if ($thinking === 'enabled') {
+      if ($max_tokens < 2) {
+        throw new \InvalidArgumentException('Bedrock thinking requires max_tokens of at least 2.');
+      }
+      $request_body['thinking'] = [
+        'type' => 'enabled',
+        'budget_tokens' => max(1, min(1024, $max_tokens - 1)),
+      ];
     }
 
     $start_time = microtime(TRUE);
@@ -235,8 +254,24 @@ class AIApiService {
       'model_id' => $resolved_model,
       'response' => $text,
       'stop_reason' => (string) ($result['stop_reason'] ?? 'unknown'),
+      'finish_reason' => (string) ($result['stop_reason'] ?? 'unknown'),
+      'reasoning_tokens' => NULL,
       'duration_ms' => $duration_ms,
     ];
+  }
+
+  /**
+   * Normalize optional provider thinking control.
+   */
+  private function normalizeThinkingOption(array $options): ?string {
+    if (!array_key_exists('thinking', $options) || $options['thinking'] === NULL || $options['thinking'] === '') {
+      return NULL;
+    }
+    $thinking = strtolower(trim((string) $options['thinking']));
+    if (!in_array($thinking, ['enabled', 'disabled'], TRUE)) {
+      throw new \InvalidArgumentException("Invalid thinking option '{$thinking}'. Expected 'enabled' or 'disabled'.");
+    }
+    return $thinking;
   }
 
   /**
@@ -271,6 +306,10 @@ class AIApiService {
     if ($resolved_model !== '') {
       $payload['model'] = $resolved_model;
     }
+    $thinking = $this->normalizeThinkingOption($options);
+    if ($thinking !== NULL) {
+      $payload['thinking'] = ['type' => $thinking];
+    }
 
     $start_time = microtime(TRUE);
     $response = $this->httpClient->request('POST', $this->getDeepSeekBaseUrl() . '/chat/completions', [
@@ -283,17 +322,41 @@ class AIApiService {
       'timeout' => 120,
     ]);
     $duration_ms = (int) ((microtime(TRUE) - $start_time) * 1000);
-    $result = json_decode((string) $response->getBody(), TRUE);
-    $text = trim((string) (($result['choices'][0]['message']['content'] ?? '')));
+    $status = method_exists($response, 'getStatusCode') ? (int) $response->getStatusCode() : 0;
+    $body = (string) $response->getBody();
+    $result = json_decode($body, TRUE);
+    if (json_last_error() !== JSON_ERROR_NONE || !is_array($result) || !isset($result['choices']) || !is_array($result['choices']) || !isset($result['choices'][0]) || !is_array($result['choices'][0])) {
+      throw new \RuntimeException(sprintf(
+        'Unexpected DeepSeek response format (HTTP status %s): %s',
+        $status ?: 'unknown',
+        mb_substr($body, 0, 300)
+      ));
+    }
+
+    $choice = $result['choices'][0];
+    $finish_reason = (string) ($choice['finish_reason'] ?? 'unknown');
+    $reasoning_tokens = isset($result['usage']['completion_tokens_details']['reasoning_tokens'])
+      ? (int) $result['usage']['completion_tokens_details']['reasoning_tokens']
+      : NULL;
+    $model = (string) ($result['model'] ?? ($resolved_model !== '' ? $resolved_model : 'deepseek-v4-flash'));
+    $text = trim((string) (($choice['message']['content'] ?? '')));
     if ($text === '') {
-      throw new \RuntimeException('Unexpected DeepSeek response format');
+      throw new \RuntimeException(sprintf(
+        "DeepSeek response content was empty (finish_reason=%s, reasoning_tokens=%s, max_tokens=%d, model=%s): reasoning model consumed the completion budget; pass options.thinking='disabled' or raise max_tokens",
+        $finish_reason,
+        $reasoning_tokens === NULL ? 'null' : (string) $reasoning_tokens,
+        $max_tokens,
+        $model
+      ));
     }
 
     return [
       'provider' => 'deepseek',
-      'model_id' => (string) ($result['model'] ?? ($resolved_model !== '' ? $resolved_model : 'deepseek-v4-flash')),
+      'model_id' => $model,
       'response' => $text,
-      'stop_reason' => (string) ($result['choices'][0]['finish_reason'] ?? 'unknown'),
+      'stop_reason' => $finish_reason,
+      'finish_reason' => $finish_reason,
+      'reasoning_tokens' => $reasoning_tokens,
       'duration_ms' => $duration_ms,
     ];
   }
@@ -337,6 +400,8 @@ class AIApiService {
       $duration_ms = $result['duration_ms'];
       $ai_response = $result['response'];
       $stop_reason = $result['stop_reason'];
+      $finish_reason = $result['finish_reason'];
+      $reasoning_tokens = $result['reasoning_tokens'];
 
       // Estimate output tokens and update total.
       $output_tokens = $this->estimateTokens($ai_response);
@@ -355,6 +420,8 @@ class AIApiService {
           'conversation_id' => $conversation->id(),
           'conversation_title' => $conversation->getTitle(),
           'provider' => $provider,
+          'finish_reason' => $finish_reason,
+          'reasoning_tokens' => $reasoning_tokens,
         ],
         'success' => TRUE,
         'prompt' => $context,
@@ -659,6 +726,8 @@ class AIApiService {
    *   - model_id: Override default model
    *   - max_tokens: Override default max_tokens (default: 8000)
    *   - system_prompt: Optional system prompt
+   *   - thinking: Optional reasoning control, 'enabled' or 'disabled'.
+   *     DeepSeek sends {"thinking":{"type":value}} when set.
    *   - skip_cache: Set to TRUE to bypass cache lookup (default: FALSE)
    * 
    * @return array
@@ -666,6 +735,8 @@ class AIApiService {
    *   - success: bool
    *   - response: string (AI response text)
    *   - stop_reason: string
+   *   - finish_reason: string
+   *   - reasoning_tokens: int|null
    *   - input_tokens: int
    *   - output_tokens: int
    *   - error: string (if success is false)
@@ -673,9 +744,23 @@ class AIApiService {
    */
   public function invokeModelDirect(string $prompt, string $module, string $operation, array $context_data = [], array $options = []) {
     try {
+      $provider = strtolower(trim((string) ($options['provider'] ?? $this->getDefaultProvider())));
+      $model_id = $options['model_id']
+        ?? ($provider === 'bedrock' ? $this->getModelFallbacks()[0] : $this->getDeepSeekModel());
+      $max_tokens = $options['max_tokens'] ?? 8000;
+      $thinking = $this->normalizeThinkingOption($options);
+      $cache_context_data = $context_data + [
+        'max_tokens' => $max_tokens,
+        'model_id' => $model_id,
+        'provider' => $provider,
+      ];
+      if ($thinking !== NULL) {
+        $cache_context_data['thinking'] = $thinking;
+      }
+
       // Check cache first (unless explicitly disabled)
       if (empty($options['skip_cache'])) {
-        $cached = $this->getCachedApiResponse($module, $operation, $context_data);
+        $cached = $this->getCachedApiResponse($module, $operation, $cache_context_data);
         if ($cached) {
           $this->logInfo('♻️ Reusing cached GenAI response from @timestamp for @module/@operation', [
             '@timestamp' => date('Y-m-d H:i:s', $cached['timestamp']),
@@ -687,6 +772,8 @@ class AIApiService {
             'success' => TRUE,
             'response' => $cached['response'],
             'stop_reason' => $cached['stop_reason'],
+            'finish_reason' => $cached['stop_reason'],
+            'reasoning_tokens' => NULL,
             'input_tokens' => $cached['input_tokens'],
             'output_tokens' => $cached['output_tokens'],
             'cached' => TRUE,
@@ -695,28 +782,30 @@ class AIApiService {
       }
       
       // No cache hit - proceed with API call
-      $provider = strtolower(trim((string) ($options['provider'] ?? $this->getDefaultProvider())));
-      $model_id = $options['model_id']
-        ?? ($provider === 'bedrock' ? $this->getModelFallbacks()[0] : $this->getDeepSeekModel());
-      $max_tokens = $options['max_tokens'] ?? 8000;
-
       $start_time = microtime(TRUE);
       $result = $this->invokePrompt($prompt, $max_tokens, [
         'provider' => $provider,
         'model_id' => $model_id,
         'system_prompt' => $options['system_prompt'] ?? NULL,
+        'thinking' => $thinking,
       ]);
       $duration_ms = $result['duration_ms'];
       $model_id = $result['model_id'];
       $ai_response = $result['response'];
       $stop_reason = $result['stop_reason'];
+      $finish_reason = $result['finish_reason'];
+      $reasoning_tokens = $result['reasoning_tokens'];
 
       // Estimate tokens
       $input_tokens = $this->estimateTokens($prompt);
       $output_tokens = $this->estimateTokens($ai_response);
 
       // Add max_tokens to context_data for debugging
-      $context_data_with_config = $context_data + ['max_tokens' => $max_tokens, 'model_id' => $model_id, 'provider' => $provider];
+      $context_data_with_config = $cache_context_data + [
+        'model_id' => $model_id,
+        'finish_reason' => $finish_reason,
+        'reasoning_tokens' => $reasoning_tokens,
+      ];
 
       // Track usage (success case)
       $this->trackApiUsage([
@@ -737,6 +826,8 @@ class AIApiService {
         'success' => TRUE,
         'response' => $ai_response,
         'stop_reason' => $stop_reason,
+        'finish_reason' => $finish_reason,
+        'reasoning_tokens' => $reasoning_tokens,
         'input_tokens' => $input_tokens,
         'output_tokens' => $output_tokens,
         'cached' => FALSE,
@@ -750,7 +841,14 @@ class AIApiService {
       $max_tokens_for_error = $options['max_tokens'] ?? 8000;
       $fallback_model = $options['model_id']
         ?? ($provider === 'bedrock' ? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0' : $this->getDeepSeekModel());
-      $context_data_with_config = $context_data + ['max_tokens' => $max_tokens_for_error, 'model_id' => $fallback_model, 'provider' => $provider];
+      $context_data_with_config = $context_data + [
+        'max_tokens' => $max_tokens_for_error,
+        'model_id' => $fallback_model,
+        'provider' => $provider,
+      ];
+      if (isset($thinking)) {
+        $context_data_with_config['thinking'] = $thinking;
+      }
       $this->trackApiUsage([
         'module' => $module,
         'operation' => $operation,
