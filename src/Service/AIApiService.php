@@ -208,9 +208,12 @@ class AIApiService {
       if ($max_tokens < 2) {
         throw new \InvalidArgumentException('Bedrock thinking requires max_tokens of at least 2.');
       }
+      $budget_tokens = isset($options['thinking_budget_tokens']) && is_numeric($options['thinking_budget_tokens'])
+        ? max(1, min((int) $options['thinking_budget_tokens'], $max_tokens - 1))
+        : max(1, min(1024, $max_tokens - 1));
       $request_body['thinking'] = [
         'type' => 'enabled',
-        'budget_tokens' => max(1, min(1024, $max_tokens - 1)),
+        'budget_tokens' => $budget_tokens,
       ];
     }
 
@@ -310,6 +313,12 @@ class AIApiService {
     if ($thinking !== NULL) {
       $payload['thinking'] = ['type' => $thinking];
     }
+    if (!empty($options['json_object']) || ($options['response_format'] ?? '') === 'json_object') {
+      $payload['response_format'] = ['type' => 'json_object'];
+    }
+    $timeout = isset($options['timeout']) && is_numeric($options['timeout'])
+      ? max(5, min(120, (int) $options['timeout']))
+      : 120;
 
     $start_time = microtime(TRUE);
     $response = $this->httpClient->request('POST', $this->getDeepSeekBaseUrl() . '/chat/completions', [
@@ -319,7 +328,7 @@ class AIApiService {
         'Authorization' => 'Bearer ' . $api_key,
       ],
       'json' => $payload,
-      'timeout' => 120,
+      'timeout' => $timeout,
     ]);
     $duration_ms = (int) ((microtime(TRUE) - $start_time) * 1000);
     $status = method_exists($response, 'getStatusCode') ? (int) $response->getStatusCode() : 0;
@@ -792,6 +801,10 @@ class AIApiService {
         'model_id' => $model_id,
         'system_prompt' => $options['system_prompt'] ?? NULL,
         'thinking' => $thinking,
+        'thinking_budget_tokens' => $options['thinking_budget_tokens'] ?? NULL,
+        'json_object' => $options['json_object'] ?? NULL,
+        'response_format' => $options['response_format'] ?? NULL,
+        'timeout' => $options['timeout'] ?? NULL,
       ]);
       $duration_ms = $result['duration_ms'];
       $model_id = $result['model_id'];
