@@ -580,6 +580,13 @@ function _ai_conversation_init_system_prompt() {
  * Update hook to add new summary fields to existing installations.
  */
 function ai_conversation_update_8001() {
+  $content_type = \Drupal::entityTypeManager()
+    ->getStorage('node_type')
+    ->load('ai_conversation');
+  if (!$content_type) {
+    return t('Skipped ai_conversation_update_8001 because ai_conversation content type is missing.');
+  }
+
   // Add the new summary fields to existing installations.
   $fields_to_add = [
     'field_conversation_summary' => [
