@@ -171,9 +171,16 @@ class AIApiService {
    *   and 'disabled'. DeepSeek maps either value to {"thinking":{"type":value}}.
    *   Bedrock maps 'enabled' to Anthropic extended thinking and treats
    *   'disabled' as the unchanged default provider behavior.
+   * - tools: Optional list of function definitions. When given, the reply
+   *   must be exactly one function call; it is returned as 'tool_call'
+   *   (name, arguments as a JSON string). DeepSeek only.
+   * - tool_choice: Required with tools. 'required', or a named function.
    */
   private function invokePrompt(string $prompt, int $max_tokens, array $options = []): array {
     $provider = strtolower(trim((string) ($options['provider'] ?? $this->getDefaultProvider())));
+    if (!empty($options['tools']) && $provider !== 'deepseek') {
+      throw new \InvalidArgumentException('ai_function_calling_unsupported_for_provider:' . $provider);
+    }
     if ($provider === 'deepseek') {
       return $this->invokeDeepSeekPrompt($prompt, $max_tokens, $options);
     }
@@ -313,7 +320,15 @@ class AIApiService {
     if ($thinking !== NULL) {
       $payload['thinking'] = ['type' => $thinking];
     }
-    if (!empty($options['json_object']) || ($options['response_format'] ?? '') === 'json_object') {
+    $uses_tools = !empty($options['tools']);
+    if ($uses_tools) {
+      if (!is_array($options['tools']) || !array_is_list($options['tools']) || empty($options['tool_choice'])) {
+        throw new \InvalidArgumentException('ai_function_calling_requires_tools_list_and_tool_choice');
+      }
+      $payload['tools'] = $options['tools'];
+      $payload['tool_choice'] = $options['tool_choice'];
+    }
+    elseif (!empty($options['json_object']) || ($options['response_format'] ?? '') === 'json_object') {
       $payload['response_format'] = ['type' => 'json_object'];
     }
     $timeout = isset($options['timeout']) && is_numeric($options['timeout'])
@@ -348,6 +363,30 @@ class AIApiService {
       ? (int) $result['usage']['completion_tokens_details']['reasoning_tokens']
       : NULL;
     $model = (string) ($result['model'] ?? ($resolved_model !== '' ? $resolved_model : 'deepseek-v4-flash'));
+    if ($uses_tools) {
+      $calls = array_values(array_filter((array) ($choice['message']['tool_calls'] ?? []), 'is_array'));
+      $name = trim((string) ($calls[0]['function']['name'] ?? ''));
+      $arguments = $calls[0]['function']['arguments'] ?? NULL;
+      if (count($calls) !== 1 || $name === '' || !is_string($arguments)) {
+        throw new \RuntimeException(sprintf(
+          'DeepSeek function-calling reply must be exactly one function call (calls=%d, finish_reason=%s, model=%s, content=%s)',
+          count($calls),
+          $finish_reason,
+          $model,
+          mb_substr(trim((string) ($choice['message']['content'] ?? '')), 0, 200)
+        ));
+      }
+      return [
+        'provider' => 'deepseek',
+        'model_id' => $model,
+        'response' => $arguments,
+        'tool_call' => ['name' => $name, 'arguments' => $arguments],
+        'stop_reason' => $finish_reason,
+        'finish_reason' => $finish_reason,
+        'reasoning_tokens' => $reasoning_tokens,
+        'duration_ms' => $duration_ms,
+      ];
+    }
     $text = trim((string) (($choice['message']['content'] ?? '')));
     if ($text === '') {
       throw new \RuntimeException(sprintf(
@@ -769,8 +808,9 @@ class AIApiService {
         $cache_context_data['thinking'] = $thinking;
       }
 
-      // Check cache first (unless explicitly disabled)
-      if (empty($options['skip_cache'])) {
+      // Check cache first (unless explicitly disabled). A function-calling
+      // reply is never served from cache: the cache stores text only.
+      if (empty($options['skip_cache']) && empty($options['tools'])) {
         $cached = $this->getCachedApiResponse($module, $operation, $cache_context_data);
         if ($cached) {
           $this->logInfo('♻️ Reusing cached GenAI response from @timestamp for @module/@operation', [
@@ -805,6 +845,8 @@ class AIApiService {
         'json_object' => $options['json_object'] ?? NULL,
         'response_format' => $options['response_format'] ?? NULL,
         'timeout' => $options['timeout'] ?? NULL,
+        'tools' => $options['tools'] ?? NULL,
+        'tool_choice' => $options['tool_choice'] ?? NULL,
       ]);
       $duration_ms = $result['duration_ms'];
       $model_id = $result['model_id'];
@@ -850,7 +892,7 @@ class AIApiService {
         'input_tokens' => $input_tokens,
         'output_tokens' => $output_tokens,
         'cached' => FALSE,
-      ];
+      ] + (isset($result['tool_call']) ? ['tool_call' => $result['tool_call']] : []);
       
     } catch (\Exception $e) {
       $this->logError('Direct AI invocation failed: @message', ['@message' => $e->getMessage()]);
