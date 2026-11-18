@@ -174,6 +174,10 @@ class AIApiService {
    * - tools: Optional list of function definitions. When given, the reply
    *   must be exactly one function call; it is returned as 'tool_call'
    *   (name, arguments as a JSON string). DeepSeek only.
+   * - tool_calls_multiple: With tools, accept a reply of several function
+   *   calls; all are returned in order as 'tool_calls'. The provider issues
+   *   parallel calls regardless of parallel_tool_calls, so a caller that can
+   *   run several must say so; otherwise more than one call is an error.
    * - tool_choice: Required with tools. 'required', or a named function.
    */
   private function invokePrompt(string $prompt, int $max_tokens, array $options = []): array {
@@ -367,9 +371,17 @@ class AIApiService {
       $calls = array_values(array_filter((array) ($choice['message']['tool_calls'] ?? []), 'is_array'));
       $name = trim((string) ($calls[0]['function']['name'] ?? ''));
       $arguments = $calls[0]['function']['arguments'] ?? NULL;
-      if (count($calls) !== 1 || $name === '' || !is_string($arguments)) {
+      $tool_calls = [];
+      foreach ($calls as $call) {
+        if (trim((string) ($call['function']['name'] ?? '')) !== '' && is_string($call['function']['arguments'] ?? NULL)) {
+          $tool_calls[] = ['name' => trim((string) $call['function']['name']), 'arguments' => $call['function']['arguments']];
+        }
+      }
+      $count_allowed = !empty($options['tool_calls_multiple']) ? $calls !== [] : count($calls) === 1;
+      if (!$count_allowed || count($tool_calls) !== count($calls)) {
         throw new \RuntimeException(sprintf(
-          'DeepSeek function-calling reply must be exactly one function call (calls=%d, finish_reason=%s, model=%s, content=%s)',
+          'DeepSeek function-calling reply must be %s (calls=%d, finish_reason=%s, model=%s, content=%s)',
+          !empty($options['tool_calls_multiple']) ? 'one or more well-formed function calls' : 'exactly one function call',
           count($calls),
           $finish_reason,
           $model,
@@ -381,6 +393,7 @@ class AIApiService {
         'model_id' => $model,
         'response' => $arguments,
         'tool_call' => ['name' => $name, 'arguments' => $arguments],
+        'tool_calls' => $tool_calls,
         'stop_reason' => $finish_reason,
         'finish_reason' => $finish_reason,
         'reasoning_tokens' => $reasoning_tokens,
@@ -892,7 +905,7 @@ class AIApiService {
         'input_tokens' => $input_tokens,
         'output_tokens' => $output_tokens,
         'cached' => FALSE,
-      ] + (isset($result['tool_call']) ? ['tool_call' => $result['tool_call']] : []);
+      ] + array_intersect_key($result, ['tool_call' => TRUE, 'tool_calls' => TRUE]);
       
     } catch (\Exception $e) {
       $this->logError('Direct AI invocation failed: @message', ['@message' => $e->getMessage()]);
