@@ -398,6 +398,8 @@ class AIApiService {
         'finish_reason' => $finish_reason,
         'reasoning_tokens' => $reasoning_tokens,
         'duration_ms' => $duration_ms,
+        // The provider's own token counts; the caller's are estimates.
+        'usage' => is_array($result['usage'] ?? NULL) ? $result['usage'] : NULL,
       ];
     }
     $text = trim((string) (($choice['message']['content'] ?? '')));
@@ -419,6 +421,7 @@ class AIApiService {
       'finish_reason' => $finish_reason,
       'reasoning_tokens' => $reasoning_tokens,
       'duration_ms' => $duration_ms,
+      'usage' => is_array($result['usage'] ?? NULL) ? $result['usage'] : NULL,
     ];
   }
 
@@ -905,7 +908,7 @@ class AIApiService {
         'input_tokens' => $input_tokens,
         'output_tokens' => $output_tokens,
         'cached' => FALSE,
-      ] + array_intersect_key($result, ['tool_call' => TRUE, 'tool_calls' => TRUE]);
+      ] + array_intersect_key($result, ['tool_call' => TRUE, 'tool_calls' => TRUE, 'usage' => TRUE]);
       
     } catch (\Exception $e) {
       $this->logError('Direct AI invocation failed: @message', ['@message' => $e->getMessage()]);
